@@ -30,7 +30,7 @@
 #include "sensor_service.h"
 #include "led_service.h"
 #include "seal_check_service.h"
-
+#include "sine_wave_test.h"
 #include "SensorScheme.h"
 #include "DefaultSensors.h"
 
@@ -114,6 +114,8 @@ int main(void) {
 
 	ret = init_seal_check_service();
 	ERR_CHK(ret);
+
+	 ret =init_sine_wave_test();
 
 	bt_mgmt_conn_interval_init(new ConnIntvlLinear(
 	    4,                // linear increase step (8ms units)
