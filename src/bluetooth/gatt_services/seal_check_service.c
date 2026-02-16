@@ -35,6 +35,9 @@ static uint8_t seal_check_start_value = 0x00;
 static struct seal_check_data seal_check_result_data;
 static bool ccc_enabled = false;
 
+// Microphone selection (default: left=true, right=false)
+static uint8_t mic_selection[2] = {0x01, 0x00}; // [left_enabled, right_enabled]
+
 // Function prototypes
 //extern int audio_datapath_multitone_play(uint16_t dur_ms, float amplitude);
 extern int hw_codec_volume_set(uint8_t volume);
@@ -84,7 +87,10 @@ static ssize_t write_seal_check_start(struct bt_conn *conn,
 		// Start multitone playbook (1.0 amplitude)
 		ret = audio_datapath_buffer_play((int16_t*)multitone, multitone_length, false, 1.0f, NULL);
 
-		record_to_buffer(seal_check_mic, NUM_SEAL_CHECK_SAMPLES, INITIAL_SEAL_CHECK_DROP, true, false, seal_check_callback);
+		// Use selected microphone configuration
+		bool left_mic = (mic_selection[0] != 0);
+		bool right_mic = (mic_selection[1] != 0);
+		record_to_buffer(seal_check_mic, NUM_SEAL_CHECK_SAMPLES, INITIAL_SEAL_CHECK_DROP, left_mic, right_mic, seal_check_callback);
 		
 		if (ret != 0) {
 			LOG_ERR("Failed to start seal check: %d", ret);
@@ -114,6 +120,40 @@ static void seal_check_result_ccc_cfg_changed(const struct bt_gatt_attr *attr, u
 	LOG_INF("Seal check result notifications %s", ccc_enabled ? "enabled" : "disabled");
 }
 
+// Callback for microphone selection write
+static ssize_t write_mic_selection(struct bt_conn *conn,
+				   const struct bt_gatt_attr *attr,
+				   const void *buf, uint16_t len, 
+				   uint16_t offset, uint8_t flags)
+{
+	if (offset + len > sizeof(mic_selection)) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+
+	if (len != 2) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+
+	uint8_t *values = (uint8_t*)buf;
+	mic_selection[0] = values[0]; // left_enabled
+	mic_selection[1] = values[1]; // right_enabled
+	
+	LOG_INF("Microphone selection updated: left=%s, right=%s", 
+		mic_selection[0] ? "enabled" : "disabled",
+		mic_selection[1] ? "enabled" : "disabled");
+	
+	return len;
+}
+
+// Callback for microphone selection read
+static ssize_t read_mic_selection(struct bt_conn *conn,
+				  const struct bt_gatt_attr *attr,
+				  void *buf, uint16_t len, uint16_t offset)
+{
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, 
+				mic_selection, sizeof(mic_selection));
+}
+
 // GATT service definition
 BT_GATT_SERVICE_DEFINE(seal_check_svc,
 	BT_GATT_PRIMARY_SERVICE(BT_UUID_SEAL_CHECK_SERVICE),
@@ -124,6 +164,13 @@ BT_GATT_SERVICE_DEFINE(seal_check_svc,
 			      BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
 			      read_seal_check_start, write_seal_check_start, 
 			      &seal_check_start_value),
+			      
+	// Microphone Selection Characteristic
+	BT_GATT_CHARACTERISTIC(BT_UUID_SEAL_CHECK_MIC_SELECT,
+			      BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+			      BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+			      read_mic_selection, write_mic_selection,
+			      mic_selection),
 			      
 	// Result Data Characteristic
 	BT_GATT_CHARACTERISTIC(BT_UUID_SEAL_CHECK_RESULT,
@@ -405,7 +452,7 @@ int seal_check_notify_result(const struct seal_check_data *data)
 	seal_check_start_value = 0x00;
 	
 	// Send notification
-	int err = bt_gatt_notify(NULL, &seal_check_svc.attrs[4], 
+	int err = bt_gatt_notify(NULL, &seal_check_svc.attrs[6], 
 			        &seal_check_result_data, sizeof(seal_check_result_data));
 	
 	if (err) {

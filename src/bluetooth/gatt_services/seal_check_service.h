@@ -27,6 +27,13 @@
 #define BT_UUID_SEAL_CHECK_RESULT \
 	BT_UUID_DECLARE_128(BT_UUID_SEAL_CHECK_RESULT_VAL)
 
+// Microphone Selection Characteristic UUID (2 bytes: left_enabled, right_enabled)
+#define BT_UUID_SEAL_CHECK_MIC_SELECT_VAL \
+	BT_UUID_128_ENCODE(0x1234567B, 0x1234, 0x5678, 0x9abc, 0xdef123456789)
+
+#define BT_UUID_SEAL_CHECK_MIC_SELECT \
+	BT_UUID_DECLARE_128(BT_UUID_SEAL_CHECK_MIC_SELECT_VAL)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
