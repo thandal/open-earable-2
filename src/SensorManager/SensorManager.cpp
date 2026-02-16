@@ -22,6 +22,8 @@
 #include <string>
 #include <set>
 
+#include "audio_datapath.h"
+
 #include <sensor_service.h>
 
 #include <zephyr/logging/log.h>
@@ -177,6 +179,10 @@ void stop_sensor_manager() {
 
 	LOG_DBG("Stopping sensor manager");
 
+	// Stop audio recording/processing first to prevent race condition
+	//extern "C" void audio_datapath_stop_recording(void);
+	audio_datapath_stop_recording();
+
     Baro::sensor.stop();
 	IMU::sensor.stop();
 	PPG::sensor.stop();
@@ -245,7 +251,7 @@ static void config_work_handler(struct k_work *work) {
 	if (sensor->is_running()) {
 		sensor->stop();
 		active_sensors--;
-
+		
 		if (active_sensors < 0) {
 			LOG_WRN("Active sensors is already 0");
 			active_sensors = 0;
@@ -278,6 +284,7 @@ static void config_work_handler(struct k_work *work) {
 			std::string filename = recording_name_prefix + std::to_string(micros());
 			int ret = sdlogger.begin(filename);
 			if (ret == 0) state_indicator.set_sd_state(SD_RECORDING);
+			else LOG_ERR("Failed to start SDLogger, ret: %d", ret);
 		}
 	} else if (sd_sensors.find(config.sensorId) != sd_sensors.end()) {
 		sd_sensors.erase(config.sensorId);
