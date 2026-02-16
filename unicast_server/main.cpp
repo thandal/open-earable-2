@@ -114,17 +114,18 @@ int main(void) {
 	ret = init_sensor_service();
 	ERR_CHK(ret);
 
-	ret = init_seal_check_service();
-	ERR_CHK(ret);
+	// ret = init_seal_check_service();
+	// ERR_CHK(ret);
 
 	ret = init_sine_wave_test();
 	ERR_CHK(ret);
+
 	k_sleep(K_SECONDS(1));
 	LOG_INF("Starting automatic sine wave test...");
-ret = sine_wave_test_start();
-if (ret != 0) {
+	ret = sine_wave_test_start();
+	if (ret != 0) {
     LOG_ERR("Failed to start sine wave test: %d", ret);
-}
+	}
 
 	bt_mgmt_conn_interval_init(new ConnIntvlLinear(
 	    4,                // linear increase step (8ms units)
