@@ -63,6 +63,28 @@ int bt_content_ctrl_media_play(struct bt_conn *conn);
 int bt_content_ctrl_media_pause(struct bt_conn *conn);
 
 /**
+ * @brief	Send a next-track command to the media player.
+ *
+ * @param[in]	conn	Pointer to the connection to control; can be NULL.
+ *
+ * @note	If @p conn is NULL, the command is sent to all discovered mcc_peers.
+ *
+ * @return	0 for success, error otherwise.
+ */
+int bt_content_ctrl_media_next(struct bt_conn *conn);
+
+/**
+ * @brief	Send a previous-track command to the media player.
+ *
+ * @param[in]	conn	Pointer to the connection to control; can be NULL.
+ *
+ * @note	If @p conn is NULL, the command is sent to all discovered mcc_peers.
+ *
+ * @return	0 for success, error otherwise.
+ */
+int bt_content_ctrl_media_prev(struct bt_conn *conn);
+
+/**
  * @brief	Reset the media control peer's discovered state
  *
  * @note	Only valid for client.

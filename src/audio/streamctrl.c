@@ -16,6 +16,8 @@
 #include "button_assignments.h"
 #include "macros_common.h"
 #include "audio_system.h"
+#include "media_control.h"
+#include "button_gesture_recognizer.h"
 
 #include "bt_le_audio_tx.h"
 #include "bt_mgmt.h"
@@ -79,53 +81,20 @@ static void button_msg_sub_thread(void)
 		LOG_DBG("Got btn evt from queue - id = %d, action = %d", msg.button_pin,
 			msg.button_action);
 
-		if (msg.button_action != BUTTON_RELEASED) {
-			// LOG_WRN("Unhandled button action");
-			continue;
+		ret = button_gesture_recognizer_handle(&msg);
+		if (ret) {
+			LOG_WRN("Button gesture recognizer failed: %d", ret);
 		}
 
 		switch (msg.button_pin) {
 		case BUTTON_PLAY_PAUSE:
-			if (IS_ENABLED(CONFIG_WALKIE_TALKIE_DEMO)) {
-				LOG_WRN("Play/pause not supported in walkie-talkie mode");
-				break;
-			}
-
-			if (bt_content_ctlr_media_state_playing()) {
-				ret = bt_content_ctrl_stop(NULL);
-				if (ret) {
-					LOG_WRN("Could not stop: %d", ret);
-				}
-
-			} else if (!bt_content_ctlr_media_state_playing()) {
-				ret = bt_content_ctrl_start(NULL);
-				if (ret) {
-					LOG_WRN("Could not start: %d", ret);
-				}
-
-			} else {
-				LOG_WRN("In invalid state: %d", strm_state);
-			}
-
-			break;
-
-		case BUTTON_VOLUME_UP:
-			ret = bt_r_and_c_volume_up();
-			if (ret) {
-				LOG_WRN("Failed to increase volume: %d", ret);
-			}
-
-			break;
-
-		case BUTTON_VOLUME_DOWN:
-			ret = bt_r_and_c_volume_down();
-			if (ret) {
-				LOG_WRN("Failed to decrease volume: %d", ret);
-			}
-
 			break;
 
 		case BUTTON_4:
+			if (msg.button_action != BUTTON_RELEASED) {
+				break;
+			}
+
 			if (IS_ENABLED(CONFIG_AUDIO_TEST_TONE)) {
 				if (IS_ENABLED(CONFIG_WALKIE_TALKIE_DEMO)) {
 					LOG_DBG("Test tone is disabled in walkie-talkie mode");
@@ -148,6 +117,10 @@ static void button_msg_sub_thread(void)
 			break;
 
 		case BUTTON_5:
+			if (msg.button_action != BUTTON_RELEASED) {
+				break;
+			}
+
 			if (IS_ENABLED(CONFIG_AUDIO_MUTE)) {
 				ret = bt_r_and_c_volume_mute(false);
 				if (ret) {
@@ -160,7 +133,7 @@ static void button_msg_sub_thread(void)
 			break;
 
 		default:
-			LOG_WRN("Unexpected/unhandled button id: %d", msg.button_pin);
+			break;
 		}
 
 		STACK_USAGE_PRINT("button_msg_thread", &button_msg_sub_thread_data);
@@ -661,6 +634,12 @@ int streamctrl_start() //streamctrl_start
 	ERR_CHK(ret);
 
 	ret = audio_system_init();
+	ERR_CHK(ret);
+
+	ret = media_control_init();
+	ERR_CHK(ret);
+
+	ret = button_gesture_recognizer_init();
 	ERR_CHK(ret);
 
 	ret = zbus_subscribers_create();

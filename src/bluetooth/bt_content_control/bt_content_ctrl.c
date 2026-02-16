@@ -80,6 +80,52 @@ int bt_content_ctrl_stop(struct bt_conn *conn)
 	return 0;
 }
 
+int bt_content_ctrl_next(struct bt_conn *conn)
+{
+	int ret;
+	struct content_control_msg msg;
+
+	if (IS_ENABLED(CONFIG_BT_MCC) || IS_ENABLED(CONFIG_BT_MCS)) {
+		ret = bt_content_ctrl_media_next(conn);
+		if (ret) {
+			LOG_WRN("Failed to skip to next content");
+			return ret;
+		}
+
+		return 0;
+	}
+
+	msg.event = MEDIA_NEXT;
+
+	ret = zbus_chan_pub(&cont_media_chan, &msg, K_NO_WAIT);
+	ERR_CHK_MSG(ret, "zbus publication failed");
+
+	return 0;
+}
+
+int bt_content_ctrl_prev(struct bt_conn *conn)
+{
+	int ret;
+	struct content_control_msg msg;
+
+	if (IS_ENABLED(CONFIG_BT_MCC) || IS_ENABLED(CONFIG_BT_MCS)) {
+		ret = bt_content_ctrl_media_prev(conn);
+		if (ret) {
+			LOG_WRN("Failed to move to previous content");
+			return ret;
+		}
+
+		return 0;
+	}
+
+	msg.event = MEDIA_PREV;
+
+	ret = zbus_chan_pub(&cont_media_chan, &msg, K_NO_WAIT);
+	ERR_CHK_MSG(ret, "zbus publication failed");
+
+	return 0;
+}
+
 int bt_content_ctrl_conn_disconnected(struct bt_conn *conn)
 {
 	int ret;

@@ -94,6 +94,8 @@ struct volume_msg {
 enum content_control_evt_type {
 	MEDIA_START = 1,
 	MEDIA_STOP,
+	MEDIA_NEXT,
+	MEDIA_PREV,
 };
 
 struct content_control_msg {

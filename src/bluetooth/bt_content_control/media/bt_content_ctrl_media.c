@@ -7,6 +7,7 @@
 #include "bt_content_ctrl_media_internal.h"
 
 #include <zephyr/kernel.h>
+#include <zephyr/sys/util.h>
 #include <zephyr/types.h>
 #include <zephyr/bluetooth/att.h>
 #include <zephyr/bluetooth/conn.h>
@@ -448,6 +449,38 @@ int bt_content_ctrl_media_pause(struct bt_conn *conn)
 	}
 
 	return 0;
+}
+
+int bt_content_ctrl_media_next(struct bt_conn *conn)
+{
+#if defined(BT_MCS_OPC_NEXT_TRACK)
+	struct mpl_cmd cmd = {
+		.opcode = BT_MCS_OPC_NEXT_TRACK,
+		.use_param = false,
+	};
+
+	return mpl_cmd_send(conn, &cmd);
+#else
+	ARG_UNUSED(conn);
+	LOG_WRN("Next track opcode not supported by this SDK");
+	return -ENOTSUP;
+#endif
+}
+
+int bt_content_ctrl_media_prev(struct bt_conn *conn)
+{
+#if defined(BT_MCS_OPC_PREV_TRACK)
+	struct mpl_cmd cmd = {
+		.opcode = BT_MCS_OPC_PREV_TRACK,
+		.use_param = false,
+	};
+
+	return mpl_cmd_send(conn, &cmd);
+#else
+	ARG_UNUSED(conn);
+	LOG_WRN("Previous track opcode not supported by this SDK");
+	return -ENOTSUP;
+#endif
 }
 
 bool bt_content_ctlr_media_state_playing(void)

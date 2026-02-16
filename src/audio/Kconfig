@@ -8,6 +8,26 @@ rsource "Kconfig.defaults"
 
 menu "Audio"
 
+config BUTTON_GESTURE_MULTIPRESS_WINDOW_MS
+	int "Button multi-press gesture window (ms)"
+	range 150 1000
+	default 350
+	help
+	  Time window used to resolve single, double, and triple press gestures
+	  from the main button.
+
+config MEDIA_CONTROL_MSG_SUB_QUEUE_SIZE
+	int "Media control zbus subscriber queue size"
+	default 4
+
+config MEDIA_CONTROL_MSG_SUB_STACK_SIZE
+	int "Media control subscriber stack size"
+	default 1024
+
+config MEDIA_CONTROL_MSG_SUB_THREAD_PRIO
+	int "Media control subscriber thread priority"
+	default 5
+
 choice AUDIO_FRAME_DURATION
 	prompt "Select frame duration - 7.5 ms frame duration is not tested"
 	default AUDIO_FRAME_DURATION_10_MS

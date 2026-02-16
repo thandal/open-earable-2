@@ -28,6 +28,24 @@ int bt_content_ctrl_start(struct bt_conn *conn);
 int bt_content_ctrl_stop(struct bt_conn *conn);
 
 /**
+ * @brief	Send the next-track request for content transmission.
+ *
+ * @param[in]	conn	Pointer to the connection to control; can be NULL.
+ *
+ * @return	0 for success, error otherwise.
+ */
+int bt_content_ctrl_next(struct bt_conn *conn);
+
+/**
+ * @brief	Send the previous-track request for content transmission.
+ *
+ * @param[in]	conn	Pointer to the connection to control; can be NULL.
+ *
+ * @return	0 for success, error otherwise.
+ */
+int bt_content_ctrl_prev(struct bt_conn *conn);
+
+/**
  * @brief	Handle disconnected connection for the content control services.
  *
  * @param[in]	conn	Pointer to the disconnected connection.
