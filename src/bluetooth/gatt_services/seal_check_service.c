@@ -84,7 +84,7 @@ static ssize_t write_seal_check_start(struct bt_conn *conn,
 		// Start multitone playbook (1.0 amplitude)
 		ret = audio_datapath_buffer_play((int16_t*)multitone, multitone_length, false, 1.0f, NULL);
 
-		record_to_buffer(seal_check_mic, NUM_SEAL_CHECK_SAMPLES, INITIAL_SEAL_CHECK_DROP, false, true, seal_check_callback);
+		record_to_buffer(seal_check_mic, NUM_SEAL_CHECK_SAMPLES, INITIAL_SEAL_CHECK_DROP, true, false, seal_check_callback);
 		
 		if (ret != 0) {
 			LOG_ERR("Failed to start seal check: %d", ret);
