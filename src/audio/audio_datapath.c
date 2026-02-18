@@ -884,7 +884,7 @@ static void tone_mix(uint8_t *tx_buf)
 		}
 
 		ret = pcm_mix(tx_buf, BLK_STEREO_SIZE_OCTETS, buffer_play_buf, BLK_MONO_SIZE_OCTETS,
-			      B_MONO_INTO_A_STEREO_L);
+			      B_MONO_INTO_A_STEREO_LR);
 		ERR_CHK(ret);
 	}
 }

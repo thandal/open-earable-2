@@ -9,6 +9,7 @@
 #include "../../SensorManager/SensorManager.h"
 #include "audio_datapath.h"
 #include "decimation_filter.h"
+#include "hw_codec.h"
 
 #include "multitone.h"
 
@@ -41,6 +42,8 @@ static uint8_t mic_selection[2] = {0x01, 0x00}; // [left_enabled, right_enabled]
 // Function prototypes
 //extern int audio_datapath_multitone_play(uint16_t dur_ms, float amplitude);
 extern int hw_codec_volume_set(uint8_t volume);
+extern int hw_codec_default_conf_enable(void);
+extern int hw_codec_volume_unmute(void);
 
 extern struct data_fifo fifo_rx;
 
@@ -78,26 +81,60 @@ static ssize_t write_seal_check_start(struct bt_conn *conn,
 			}
 		}
 
-		// Set volume and start multitone
-		hw_codec_volume_set(0xB0);
-
 		audio_datapath_decimator_init(12); // 12 = 4kHz
-		audio_datapath_aquire(&fifo_rx);
-		
+		ret = audio_datapath_aquire(&fifo_rx);
+		if (ret != 0) {
+			LOG_ERR("Failed to acquire audio datapath: %d", ret);
+			seal_check_start_value = 0x00;
+			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+		}
+
+		ret = hw_codec_set_audio_mode(AUDIO_MODE_NORMAL);
+		if (ret != 0) {
+			LOG_ERR("Failed to force normal audio mode: %d", ret);
+			seal_check_start_value = 0x00;
+			audio_datapath_release();
+			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+		}
+
+		ret = hw_codec_default_conf_enable();
+		if (ret != 0) {
+			LOG_ERR("Failed to enable codec output: %d", ret);
+			seal_check_start_value = 0x00;
+			audio_datapath_release();
+			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+		}
+
+		ret = hw_codec_volume_unmute();
+		if (ret != 0) {
+			LOG_ERR("Failed to unmute codec output: %d", ret);
+			seal_check_start_value = 0x00;
+			audio_datapath_release();
+			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+		}
+
+		ret = hw_codec_volume_set(0xFF);
+		if (ret != 0) {
+			LOG_ERR("Failed to set codec volume: %d", ret);
+			seal_check_start_value = 0x00;
+			audio_datapath_release();
+			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+		}
+
 		// Start multitone playbook (1.0 amplitude)
 		ret = audio_datapath_buffer_play((int16_t*)multitone, multitone_length, false, 1.0f, NULL);
+		if (ret != 0) {
+			LOG_ERR("Failed to start seal check playback: %d", ret);
+			seal_check_start_value = 0x00;
+			audio_datapath_release();
+			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+		}
 
 		// Use selected microphone configuration
 		bool left_mic = (mic_selection[0] != 0);
 		bool right_mic = (mic_selection[1] != 0);
 		record_to_buffer(seal_check_mic, NUM_SEAL_CHECK_SAMPLES, INITIAL_SEAL_CHECK_DROP, left_mic, right_mic, seal_check_callback);
-		
-		if (ret != 0) {
-			LOG_ERR("Failed to start seal check: %d", ret);
-			seal_check_start_value = 0x00;
-			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
-		}
-		
+
 		LOG_INF("Seal check started successfully");
 	}
 	
