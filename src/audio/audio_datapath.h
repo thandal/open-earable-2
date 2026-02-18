@@ -80,6 +80,16 @@ void record_to_buffer_stop(void);
 void audio_datapath_stop_recording(void);
 
 /**
+ * @brief Stops buffer recording safely
+ */
+void record_to_buffer_stop(void);
+
+/**
+ * @brief Stops all audio recording safely (buffer and SD)
+ */
+void audio_datapath_stop_recording(void);
+
+/**
  * @brief Set the presentation delay
  *
  * @param delay_us The presentation delay in µs

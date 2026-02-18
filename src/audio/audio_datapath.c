@@ -251,9 +251,8 @@ static void data_thread(void *arg1, void *arg2, void *arg3)
             data_fifo_block_free(ctrl_blk.in.fifo, tmp_pcm_raw_data[i]);
 
 			unsigned int logger_signaled;
-			k_poll_signal_check(&logger_sig, &logger_signaled, &ret);
 
-			if (ret == 0 && (_record_to_sd || _record_to_buffer)) {
+			if (_record_to_sd || _record_to_buffer) {
 				/* Decimate audio data from 48kHz to the desired sampling rate */
 				int16_t *audio_block = (int16_t *)(audio_item.data + (i * BLOCK_SIZE_BYTES));
 				uint32_t num_frames = BLOCK_SIZE_BYTES / sizeof(int16_t) / 2; /* stereo frames */
@@ -307,34 +306,32 @@ static void data_thread(void *arg1, void *arg2, void *arg3)
 					}
 				}
 
-				if (logger_signaled != 0 && _record_to_sd) {
-					struct sensor_msg audio_msg;
-		
-					audio_msg.sd = true;
-					audio_msg.stream = false;
-		
-					audio_msg.data.id = ID_MICRO;
-					audio_msg.data.time = time_stamp;
+				struct sensor_msg audio_msg;
+	
+				audio_msg.sd = true;
+				audio_msg.stream = false;
+	
+				audio_msg.data.id = ID_MICRO;
+				audio_msg.data.time = time_stamp;
 
-					audio_msg.data.size = decimated_frames * 2 * sizeof(int16_t);
+				audio_msg.data.size = decimated_frames * 2 * sizeof(int16_t);
 
-					uint32_t data_size[2] = {
-						sizeof(audio_msg.data.id) + sizeof(audio_msg.data.size) + sizeof(audio_msg.data.time),
-						audio_msg.data.size
-					};
+				uint32_t data_size[2] = {
+					sizeof(audio_msg.data.id) + sizeof(audio_msg.data.size) + sizeof(audio_msg.data.time),
+					audio_msg.data.size
+				};
 
-					void *data_ptrs[2] = {
-						&audio_msg.data,
-						decimated_audio
-					};
+				void *data_ptrs[2] = {
+					&audio_msg.data,
+					decimated_audio
+				};
 
-					if (decimated_frames == num_frames) {
-						data_ptrs[1] = audio_block;
-					}
-		
-					if (decimated_frames > 0) {
-						sdlogger_write_data(&data_ptrs, data_size, 2);
-					}
+				if (decimated_frames == num_frames) {
+					data_ptrs[1] = audio_block;
+				}
+	
+				if (decimated_frames > 0) {
+					sdlogger_write_data(&data_ptrs, data_size, 2);
 				}
 			}
 
@@ -762,6 +759,9 @@ static void tone_stop_worker(struct k_work *work)
 	buffer_play_data = NULL;
 	
 	LOG_DBG("Tone stopped");
+
+	struct sensor_config mic = {ID_MICRO, 0, 0};
+	config_sensor(&mic);
 }
 
 K_WORK_DEFINE(tone_stop_work, tone_stop_worker);
@@ -884,7 +884,7 @@ static void tone_mix(uint8_t *tx_buf)
 		}
 
 		ret = pcm_mix(tx_buf, BLK_STEREO_SIZE_OCTETS, buffer_play_buf, BLK_MONO_SIZE_OCTETS,
-			      B_MONO_INTO_A_STEREO_LR);
+			      B_MONO_INTO_A_STEREO_L);
 		ERR_CHK(ret);
 	}
 }

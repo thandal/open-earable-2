@@ -3,6 +3,7 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <math.h>
+#include <stdint.h>
 #include <data_fifo.h>
 #include "arm_math.h"
 
@@ -41,16 +42,61 @@ static uint8_t mic_selection[2] = {0x01, 0x00}; // [left_enabled, right_enabled]
 
 // Function prototypes
 //extern int audio_datapath_multitone_play(uint16_t dur_ms, float amplitude);
-extern int hw_codec_volume_set(uint8_t volume);
-extern int hw_codec_default_conf_enable(void);
-extern int hw_codec_volume_unmute(void);
-
 extern struct data_fifo fifo_rx;
 
 // Work item for seal check completion
 static struct k_work seal_check_complete_work;
 
 void seal_check_callback();
+void on_seal_check_complete(void);
+void compute_seal_check_result(void);
+
+static int seal_check_prepare_audio(void)
+{
+	int ret;
+
+	if (!fifo_rx.initialized) {
+		ret = data_fifo_init(&fifo_rx);
+		if (ret) {
+			LOG_ERR("Failed to set up rx FIFO: %d", ret);
+			return ret;
+		}
+	}
+
+	audio_datapath_decimator_init(12); // 12 = 4kHz
+
+	ret = audio_datapath_aquire(&fifo_rx);
+	if (ret) {
+		LOG_ERR("Failed to acquire audio datapath: %d", ret);
+		return ret;
+	}
+
+	/* Seal-check can run while LE Audio is idle, so we must explicitly
+	 * enable codec output path and unmute it here.
+	 */
+	ret = hw_codec_default_conf_enable();
+	if (ret) {
+		LOG_ERR("Failed to enable codec path: %d", ret);
+		audio_datapath_release();
+		return ret;
+	}
+
+	ret = hw_codec_volume_unmute();
+	if (ret) {
+		LOG_ERR("Failed to unmute codec volume: %d", ret);
+		audio_datapath_release();
+		return ret;
+	}
+
+	ret = hw_codec_volume_set(UINT8_MAX);
+	if (ret) {
+		LOG_ERR("Failed to set seal-check volume: %d", ret);
+		audio_datapath_release();
+		return ret;
+	}
+
+	return 0;
+}
 
 // Callback for start characteristic write
 static ssize_t write_seal_check_start(struct bt_conn *conn,
@@ -72,69 +118,34 @@ static ssize_t write_seal_check_start(struct bt_conn *conn,
 		LOG_INF("Seal check started via BLE");
 		seal_check_start_value = 0xFF;
 
-		int ret;
-		if (!fifo_rx.initialized) {
-			ret = data_fifo_init(&fifo_rx);
-			if (ret) {
-				LOG_ERR("Failed to set up rx FIFO: %d", ret);
-				return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
-			}
-		}
-
-		audio_datapath_decimator_init(12); // 12 = 4kHz
-		ret = audio_datapath_aquire(&fifo_rx);
-		if (ret != 0) {
-			LOG_ERR("Failed to acquire audio datapath: %d", ret);
+		int ret = seal_check_prepare_audio();
+		if (ret) {
 			seal_check_start_value = 0x00;
 			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
 		}
-
-		ret = hw_codec_set_audio_mode(AUDIO_MODE_NORMAL);
-		if (ret != 0) {
-			LOG_ERR("Failed to force normal audio mode: %d", ret);
-			seal_check_start_value = 0x00;
-			audio_datapath_release();
-			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
-		}
-
-		ret = hw_codec_default_conf_enable();
-		if (ret != 0) {
-			LOG_ERR("Failed to enable codec output: %d", ret);
-			seal_check_start_value = 0x00;
-			audio_datapath_release();
-			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
-		}
-
-		ret = hw_codec_volume_unmute();
-		if (ret != 0) {
-			LOG_ERR("Failed to unmute codec output: %d", ret);
-			seal_check_start_value = 0x00;
-			audio_datapath_release();
-			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
-		}
-
-		ret = hw_codec_volume_set(0xFF);
-		if (ret != 0) {
-			LOG_ERR("Failed to set codec volume: %d", ret);
-			seal_check_start_value = 0x00;
-			audio_datapath_release();
-			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
-		}
-
+		
 		// Start multitone playbook (1.0 amplitude)
-		ret = audio_datapath_buffer_play((int16_t*)multitone, multitone_length, false, 1.0f, NULL);
+		ret = audio_datapath_buffer_play((int16_t *)multitone, multitone_length, false, 1.0f, NULL);
 		if (ret != 0) {
-			LOG_ERR("Failed to start seal check playback: %d", ret);
-			seal_check_start_value = 0x00;
+			LOG_ERR("Failed to start seal check: %d", ret);
 			audio_datapath_release();
+			seal_check_start_value = 0x00;
 			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
 		}
 
-		// Use selected microphone configuration
 		bool left_mic = (mic_selection[0] != 0);
 		bool right_mic = (mic_selection[1] != 0);
-		record_to_buffer(seal_check_mic, NUM_SEAL_CHECK_SAMPLES, INITIAL_SEAL_CHECK_DROP, left_mic, right_mic, seal_check_callback);
+		if (!left_mic && !right_mic) {
+			LOG_ERR("Invalid microphone selection: both channels disabled");
+			audio_datapath_buffer_stop();
+			audio_datapath_release();
+			seal_check_start_value = 0x00;
+			return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+		}
 
+		record_to_buffer(seal_check_mic, NUM_SEAL_CHECK_SAMPLES, INITIAL_SEAL_CHECK_DROP,
+				 left_mic, right_mic, seal_check_callback);
+		
 		LOG_INF("Seal check started successfully");
 	}
 	
@@ -160,7 +171,7 @@ static void seal_check_result_ccc_cfg_changed(const struct bt_gatt_attr *attr, u
 // Callback for microphone selection write
 static ssize_t write_mic_selection(struct bt_conn *conn,
 				   const struct bt_gatt_attr *attr,
-				   const void *buf, uint16_t len, 
+				   const void *buf, uint16_t len,
 				   uint16_t offset, uint8_t flags)
 {
 	if (offset + len > sizeof(mic_selection)) {
@@ -171,14 +182,14 @@ static ssize_t write_mic_selection(struct bt_conn *conn,
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 	}
 
-	uint8_t *values = (uint8_t*)buf;
-	mic_selection[0] = values[0]; // left_enabled
-	mic_selection[1] = values[1]; // right_enabled
-	
-	LOG_INF("Microphone selection updated: left=%s, right=%s", 
+	uint8_t *values = (uint8_t *)buf;
+	mic_selection[0] = values[0];
+	mic_selection[1] = values[1];
+
+	LOG_INF("Microphone selection updated: left=%s, right=%s",
 		mic_selection[0] ? "enabled" : "disabled",
 		mic_selection[1] ? "enabled" : "disabled");
-	
+
 	return len;
 }
 
@@ -187,7 +198,7 @@ static ssize_t read_mic_selection(struct bt_conn *conn,
 				  const struct bt_gatt_attr *attr,
 				  void *buf, uint16_t len, uint16_t offset)
 {
-	return bt_gatt_attr_read(conn, attr, buf, len, offset, 
+	return bt_gatt_attr_read(conn, attr, buf, len, offset,
 				mic_selection, sizeof(mic_selection));
 }
 
@@ -208,7 +219,7 @@ BT_GATT_SERVICE_DEFINE(seal_check_svc,
 			      BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
 			      read_mic_selection, write_mic_selection,
 			      mic_selection),
-			      
+
 	// Result Data Characteristic
 	BT_GATT_CHARACTERISTIC(BT_UUID_SEAL_CHECK_RESULT,
 			      BT_GATT_CHRC_NOTIFY,

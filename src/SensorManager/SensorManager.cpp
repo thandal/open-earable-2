@@ -201,7 +201,7 @@ static void config_work_handler(struct k_work *work) {
 	if (sensor->is_running()) {
 		sensor->stop();
 		active_sensors--;
-		
+
 		if (active_sensors < 0) {
 			LOG_WRN("Active sensors is already 0");
 			active_sensors = 0;

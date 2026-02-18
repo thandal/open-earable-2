@@ -10,7 +10,6 @@
 #include <zephyr/usb/usb_device.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/shell/shell_uart.h>
-#include <zephyr/shell/shell_rtt.h>
 
 //#include "../src/modules/sd_card.h"
 
