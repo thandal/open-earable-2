@@ -1,9 +1,12 @@
 #ifndef _PROCESSING_PIPELINE_H
 #define _PROCESSING_PIPELINE_H
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
-#include <vector>
 #include <map>
+#include <queue>
+#include <vector>
 #include "sensor_processing_stage.h"
 #include "sensor_source_stage.h"
 
@@ -16,7 +19,7 @@ struct Edge {
 struct PipelineNode {
     const char *name;
     std::unique_ptr<SensorProcessingStage> stage;
-    std::vector<Edge> inputs;     // edges feeding into this node
+    std::vector<Edge> inputs;     // indexed by destination port
     std::vector<Edge> outputs;    // edges feeding out of this node
     struct sensor_data output;           // stage result (cached for children)
     bool has_output = false; // true if the stage produced a valid output
@@ -41,8 +44,12 @@ public:
 private:
     std::vector<PipelineNode> stages;
     std::map<uint8_t, std::vector<size_t>> source_map;
+    uint32_t run_generation = 0;
+    std::vector<uint32_t> queued_generation;
 
     int run_from(size_t start_index);
+    bool is_node_ready(size_t node_index) const;
+    bool enqueue_if_ready(size_t node_index, std::queue<size_t>& ready_queue);
 };
 
 #endif // _PROCESSING_PIPELINE_H

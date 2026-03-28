@@ -1,18 +1,18 @@
 #include "processing_pipeline.h"
 
+#include <algorithm>
 #include <zephyr/logging/log.h>
-#include <memory>
-#include "sensor_source_stage.h"
-#include <queue>
+
 LOG_MODULE_REGISTER(processing_pipeline, LOG_LEVEL_DBG);
 
 ProcessingPipeline::ProcessingPipeline() {
-    // Initialize the source_map
     this->source_map = std::map<uint8_t, std::vector<size_t>>{};
     this->stages = std::vector<PipelineNode>{};
+    this->queued_generation = std::vector<uint32_t>{};
 }
 
 void ProcessingPipeline::add_source(const char *name, std::unique_ptr<SensorSourceStage> source) {
+    const size_t node_index = this->stages.size();
     uint8_t sensor_id = source->get_sensor_id();
 
     // check if source_map already has an entry for this sensor ID
@@ -21,22 +21,45 @@ void ProcessingPipeline::add_source(const char *name, std::unique_ptr<SensorSour
         this->source_map[sensor_id] = {};
     }
 
-    this->source_map[sensor_id].push_back(this->stages.size());
+    this->source_map[sensor_id].push_back(node_index);
     this->stages.push_back({name, std::move(source), {}, {}});
+    this->queued_generation.push_back(0);
     LOG_DBG("Added source %s for sensor ID %d", name, sensor_id);
 }
     
 void ProcessingPipeline::add_stage(const char *name, std::unique_ptr<SensorProcessingStage> stage) {
-    stages.push_back({name, std::move(stage), {}, {}});
+    const size_t in_ports = stage->get_in_ports();
+    const size_t node_index = stages.size();
+    std::vector<Edge> inputs;
+    inputs.reserve(in_ports);
+    for (size_t port = 0; port < in_ports; ++port) {
+        inputs.push_back({SIZE_MAX, node_index, port});
+    }
+
+    stages.push_back({name, std::move(stage), std::move(inputs), {}});
+    queued_generation.push_back(0);
     LOG_DBG("Added stage %s", name);
 }
 
 //TODO: handle errors
 void ProcessingPipeline::connect(size_t src, size_t dst, size_t dst_port) {
     if (src < stages.size() && dst < stages.size()) {
-        stages[dst].inputs.push_back({src, dst, dst_port});
+        if (dst_port >= stages[dst].stage->get_in_ports()) {
+            LOG_ERR("Invalid destination port %zu for node %s", dst_port, stages[dst].name);
+            return;
+        }
+
+        if (stages[dst].inputs[dst_port].src != SIZE_MAX) {
+            LOG_ERR("Node %s input port %zu already connected", stages[dst].name, dst_port);
+            return;
+        }
+
+        stages[dst].inputs[dst_port] = {src, dst, dst_port};
         stages[src].outputs.push_back({src, dst, dst_port});
+        return;
     }
+
+    LOG_ERR("Invalid edge connection src=%zu dst=%zu port=%zu", src, dst, dst_port);
 }
 
 void ProcessingPipeline::connect(const char* src, const char *dest, size_t dst_port) {
@@ -77,83 +100,65 @@ int ProcessingPipeline::run() {
 
 int ProcessingPipeline::run_from(size_t start_idx) {
     if (start_idx >= stages.size()) return -EINVAL;
-    
-    std::queue<size_t> q;
-    
-    // Helper: enqueue all direct children of a node
-    auto enqueue_children = [&](size_t idx) {
+
+    std::queue<size_t> ready_queue;
+
+    if (++run_generation == 0) {
+        run_generation = 1;
+        std::fill(queued_generation.begin(), queued_generation.end(), 0);
+    }
+
+    auto enqueue_children_if_ready = [&](size_t idx) {
         for (const Edge& e : stages[idx].outputs) {
-            // e.dst is the child node index
-            if (e.dst < stages.size()) {
-                q.push(e.dst);
+            if (e.dst >= stages.size()) {
+                LOG_ERR("Node %s has invalid child index %zu", stages[idx].name, e.dst);
+                continue;
             }
+
+            enqueue_if_ready(e.dst, ready_queue);
         }
     };
 
-    // The start node is already seeded (has_output=true) by inject().
-    // We begin by enqueueing its children.
-    enqueue_children(start_idx);
+    enqueue_children_if_ready(start_idx);
 
-    while (!q.empty()) {
-        size_t i = q.front();
-        q.pop();
+    while (!ready_queue.empty()) {
+        size_t i = ready_queue.front();
+        ready_queue.pop();
+        queued_generation[i] = 0;
 
         PipelineNode& node = stages[i];
         const size_t in_count = node.stage->get_in_ports();
 
-        // SOURCE-LIKE NODES (0 inputs): don't try to resolve inputs
         if (in_count == 0) {
-            // If this node already has output, just propagate to its children.
-            // (If you want, you could call node.stage->process(nullptr, &node.output) here.)
             if (node.has_output) {
-                enqueue_children(i);
-            } else {
-                // Not seeded yet; nothing to do.
-                LOG_DBG("Node %s is a 0-input node without output; skipping", node.name);
+                enqueue_children_if_ready(i);
             }
             continue;
         }
 
-        // Sanity: wiring must match declared ports
-        if (node.inputs.size() != in_count) {
-            LOG_ERR("Node %s: expected %zu inputs, but have %zu",
-                    node.name, in_count, node.inputs.size());
-            continue;  // or return -EINVAL;
-        }
-
-        // Resolve inputs from upstream nodes
-        std::vector<const sensor_data*> inputs(in_count);
-        bool ready = true;
-        for (size_t p = 0; p < in_count; ++p) {
-            const Edge& e = node.inputs[p];
-            if (e.src >= stages.size() || !stages[e.src].has_output) {
-                ready = false;
-                break;
-            }
-            inputs[p] = &stages[e.src].output;
-        }
-
-        if (!ready) {
-            // Upstreams not ready yet; skip for now.
-            // (Optional: you can re-enqueue i later if you keep a scheduler.)
-            LOG_DBG("Node %s not ready; skipping", node.name);
+        if (!is_node_ready(i)) {
+            LOG_DBG("Node %s is no longer ready; skipping", node.name);
             continue;
         }
 
-        // Process the node
+        std::vector<const sensor_data*> inputs(in_count, nullptr);
+        for (size_t port = 0; port < in_count; ++port) {
+            inputs[port] = &stages[node.inputs[port].src].output;
+        }
+
         int rc = node.stage->process(inputs.data(), &node.output);
         if (rc < 0) {
             LOG_ERR("Error processing node %s: %d", node.name, rc);
-            // Error from stage
             return rc;
-        } else if (rc > 0) {
+        }
+
+        if (rc > 0) {
             node.has_output = false;
             continue;
-        } else {
-            // Valid result produced
-            node.has_output = true;
-            enqueue_children(i);
         }
+
+        node.has_output = true;
+        enqueue_children_if_ready(i);
     }
 
     return 0;
@@ -161,4 +166,50 @@ int ProcessingPipeline::run_from(size_t start_idx) {
 
 const struct sensor_data& ProcessingPipeline::get_output(size_t node_index) const {
     return stages[node_index].output;
+}
+
+bool ProcessingPipeline::is_node_ready(size_t node_index) const {
+    if (node_index >= stages.size()) {
+        return false;
+    }
+
+    const PipelineNode& node = stages[node_index];
+    const size_t in_count = node.stage->get_in_ports();
+
+    if (in_count == 0) {
+        return node.has_output;
+    }
+
+    if (node.inputs.size() != in_count) {
+        LOG_ERR("Node %s: expected %zu inputs, but have %zu",
+                node.name, in_count, node.inputs.size());
+        return false;
+    }
+
+    for (const Edge& e : node.inputs) {
+        if (e.src == SIZE_MAX) {
+            LOG_ERR("Node %s has an unconnected input port %zu", node.name, e.dstPort);
+            return false;
+        }
+
+        if (e.src >= stages.size() || !stages[e.src].has_output) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool ProcessingPipeline::enqueue_if_ready(size_t node_index, std::queue<size_t>& ready_queue) {
+    if (!is_node_ready(node_index)) {
+        return false;
+    }
+
+    if (queued_generation[node_index] == run_generation) {
+        return false;
+    }
+
+    queued_generation[node_index] = run_generation;
+    ready_queue.push(node_index);
+    return true;
 }
