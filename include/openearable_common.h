@@ -12,7 +12,6 @@
 
 #define SENSOR_DATA_FIXED_LENGTH 38
 
-
 #define millis() k_cyc_to_ms_floor64(k_uptime_ticks())
 
 #ifdef __cplusplus
@@ -103,9 +102,14 @@ struct sensor_data {
     uint8_t data[SENSOR_DATA_FIXED_LENGTH];
 } __attribute__((packed));
 
+enum sensor_consumer {
+	SENSOR_CONSUMER_BLE = 0x01,
+	SENSOR_CONSUMER_SD = 0x02,
+	SENSOR_CONSUMER_PROCESSING = 0x04,
+};
+
 struct sensor_msg {
-	bool sd;
-	bool stream;
+	uint8_t consumer_mask;
 	struct sensor_data data;
 };
 

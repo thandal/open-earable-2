@@ -45,9 +45,7 @@ ZBUS_LISTENER_DEFINE(sensor_queue_listener, sensor_queue_listener_cb);
 
 static bool connection_complete = false;
 
-int notify_count = 0;
-
-int MAX_NOTIFIES_IN_FLIGHT = 4;
+static struct k_mutex notify_mutex;
 
 static void connect_evt_handler(const struct zbus_channel *chan)
 {
@@ -196,14 +194,10 @@ BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_RECORDING_NAME,
 );
 
 static void notify_complete() {
-	notify_count--;
-
-	if (notify_count < 0) {
-		notify_count = 0;
-		LOG_WRN("Notify count went below zero!");
-	}
+	k_mutex_unlock(&notify_mutex);
 }
 
+//static void gatt_work_handler(struct k_work * work) {
 static void notification_task(void) {
 	int ret;
 
@@ -225,14 +219,14 @@ static void notification_task(void) {
 			params.func = notify_complete;
 			params.user_data = NULL;
 
-			while(notify_count >= MAX_NOTIFIES_IN_FLIGHT) {
-				k_yield(); // maybe replace with k_sleep?
+			ret = k_mutex_lock(&notify_mutex, K_MSEC(100));
+			if (ret != 0) {
+				LOG_ERR("Unable to lock notify mutex.");
 			}
-
-			notify_count++;
 
 			ret = bt_gatt_notify_cb(NULL, &params);
 			if (ret != 0) {
+				k_mutex_unlock(&notify_mutex);
 				LOG_WRN("Failed to send data: %d.\n", ret);
 			}
 		}
@@ -245,7 +239,7 @@ void sensor_queue_listener_cb(const struct zbus_channel *chan) {
     
     msg = (struct sensor_msg *)zbus_chan_const_msg(&sensor_chan);
 
-	if (msg->stream) {
+	if (msg->consumer_mask & SENSOR_CONSUMER_BLE) {
 		ret = k_msgq_put(&gatt_queue, &msg->data, K_NO_WAIT);
 
 		if (ret) {
@@ -354,6 +348,8 @@ int init_sensor_service() {
 	}
 
 	init_sensor_config_status();
+
+	k_mutex_init(&notify_mutex);
 
     return 0;
 }

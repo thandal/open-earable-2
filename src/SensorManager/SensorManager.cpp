@@ -131,7 +131,6 @@ void stop_sensor_manager() {
 	LOG_DBG("Stopping sensor manager");
 
 	// Stop audio recording/processing first to prevent race condition
-	//extern "C" void audio_datapath_stop_recording(void);
 	audio_datapath_stop_recording();
 
     Baro::sensor.stop();
@@ -208,10 +207,9 @@ static void config_work_handler(struct k_work *work) {
 		}
 	}
 
-	sensor->sd_logging(config.storageOptions & DATA_STORAGE);
-	sensor->ble_stream(config.storageOptions & DATA_STREAMING);
+	sensor->set_consumers(config.storageOptions);
 
-	if (config.storageOptions & (DATA_STORAGE | DATA_STREAMING)) {
+	if (config.storageOptions) {
 		if (sensor->init(&sensor_queue)) {
 			if (active_sensors == 0) start_sensor_manager();
 			sensor->start(config.sampleRateIndex);

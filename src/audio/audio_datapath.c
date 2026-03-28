@@ -240,8 +240,7 @@ static void data_thread(void *arg1, void *arg2, void *arg3)
 
 				struct sensor_msg audio_msg;
 	
-				audio_msg.sd = true;
-				audio_msg.stream = false;
+				audio_msg.consumer_mask = SENSOR_CONSUMER_SD;
 	
 				audio_msg.data.id = ID_MICRO;
 				audio_msg.data.time = time_stamp;

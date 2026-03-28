@@ -61,7 +61,7 @@ void Microphone::start(int sample_rate_idx) {
 	if (!_active) return;
 
 	LOG_INF("Starting Microphone at %f Hz", sample_rates.sample_rates[sample_rate_idx]);
-	record_to_sd(_sd_logging);
+	record_to_sd(consumers & SENSOR_CONSUMER_SD);
 
 	audio_datapath_aquire(&fifo_rx);
 
