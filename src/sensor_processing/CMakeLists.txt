@@ -10,6 +10,7 @@ target_sources(app PRIVATE
            ${CMAKE_CURRENT_SOURCE_DIR}/switch_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/processing_utils.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/adding_stage.cpp
+           ${CMAKE_CURRENT_SOURCE_DIR}/moving_mean_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/multiply_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/and_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/not_stage.cpp
