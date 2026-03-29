@@ -48,6 +48,7 @@ private:
     std::vector<uint32_t> queued_generation;
 
     int run_from(size_t start_index);
+    int materialize_autonomous_sources(std::queue<size_t>& ready_queue);
     bool is_node_ready(size_t node_index) const;
     bool enqueue_if_ready(size_t node_index, std::queue<size_t>& ready_queue);
 };

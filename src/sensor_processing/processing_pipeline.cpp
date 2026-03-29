@@ -119,6 +119,11 @@ int ProcessingPipeline::run_from(size_t start_idx) {
         }
     };
 
+    const int source_rc = materialize_autonomous_sources(ready_queue);
+    if (source_rc < 0) {
+        return source_rc;
+    }
+
     enqueue_children_if_ready(start_idx);
 
     while (!ready_queue.empty()) {
@@ -166,6 +171,37 @@ int ProcessingPipeline::run_from(size_t start_idx) {
 
 const struct sensor_data& ProcessingPipeline::get_output(size_t node_index) const {
     return stages[node_index].output;
+}
+
+int ProcessingPipeline::materialize_autonomous_sources(std::queue<size_t>& ready_queue) {
+    for (size_t i = 0; i < stages.size(); ++i) {
+        PipelineNode& node = stages[i];
+        if (node.stage->get_in_ports() != 0 || !node.stage->is_autonomous_source()) {
+            continue;
+        }
+
+        const int rc = node.stage->process(nullptr, &node.output);
+        if (rc < 0) {
+            LOG_ERR("Error processing autonomous source %s: %d", node.name, rc);
+            return rc;
+        }
+
+        node.has_output = (rc == 0);
+        if (!node.has_output) {
+            continue;
+        }
+
+        for (const Edge& e : node.outputs) {
+            if (e.dst >= stages.size()) {
+                LOG_ERR("Node %s has invalid child index %zu", node.name, e.dst);
+                continue;
+            }
+
+            enqueue_if_ready(e.dst, ready_queue);
+        }
+    }
+
+    return 0;
 }
 
 bool ProcessingPipeline::is_node_ready(size_t node_index) const {
