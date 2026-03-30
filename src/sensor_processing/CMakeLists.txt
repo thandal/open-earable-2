@@ -12,6 +12,7 @@ target_sources(app PRIVATE
            ${CMAKE_CURRENT_SOURCE_DIR}/peak_detector_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/switch_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/processing_utils.cpp
+           ${CMAKE_CURRENT_SOURCE_DIR}/absolute_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/adding_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/division_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/integral_stage.cpp
