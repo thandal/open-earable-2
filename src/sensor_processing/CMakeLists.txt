@@ -3,6 +3,7 @@ target_sources(app PRIVATE
            ${CMAKE_CURRENT_SOURCE_DIR}/sensor_processing_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/processing_pipeline.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/constant_source_stage.cpp
+           ${CMAKE_CURRENT_SOURCE_DIR}/derivative_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/sensor_source_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/zero_crossing_detector_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/trigger_action_stage.cpp
@@ -13,6 +14,7 @@ target_sources(app PRIVATE
            ${CMAKE_CURRENT_SOURCE_DIR}/processing_utils.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/adding_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/division_stage.cpp
+           ${CMAKE_CURRENT_SOURCE_DIR}/integral_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/moving_mean_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/multiply_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/power_stage.cpp
