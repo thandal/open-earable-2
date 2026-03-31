@@ -16,6 +16,8 @@ target_sources(app PRIVATE
            ${CMAKE_CURRENT_SOURCE_DIR}/adding_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/division_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/integral_stage.cpp
+           ${CMAKE_CURRENT_SOURCE_DIR}/max_stage.cpp
+           ${CMAKE_CURRENT_SOURCE_DIR}/min_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/moving_mean_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/multiply_stage.cpp
            ${CMAKE_CURRENT_SOURCE_DIR}/power_stage.cpp
