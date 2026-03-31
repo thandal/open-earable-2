@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "../../SensorManager/SensorManager.h"
+#include "media_control.h"
 #include "in_ear_detection.h"
 #include "processing_pipeline.h"
 #include "sensor_processing_consumer.h"
@@ -39,7 +40,7 @@ constexpr uint8_t kPpgSampleRateIdx = 0;   // 25 Hz
 
 constexpr float kImuAccelTriggerThreshold = 4.0f;       // m/s^2 delta from gravity
 constexpr float kImuGyroTriggerThreshold = 150.0f;      // dps
-constexpr float kBaroPressureRateThreshold = 100.0f;     // Pa/s
+constexpr float kBaroPressureRateThreshold = 150.0f;     // Pa/s
 
 constexpr uint32_t kPpgCaptureVotesRequired = 3U;
 constexpr uint32_t kPpgCaptureMaxSamples = 4U;
@@ -156,6 +157,9 @@ static void apply_in_ear_state_decision(const struct sensor_data *trigger, void 
 		return;
 	}
 
+	(void)media_control_handle_gesture(decided_state == IN_EAR_STATE_WORN
+					 ? MEDIA_CTRL_GESTURE_IN_EAR
+					 : MEDIA_CTRL_GESTURE_OUT_OF_EAR);
 	(void)in_ear_detection_set_state(decided_state, IN_EAR_UPDATE_SOURCE_PIPELINE, 0U);
 }
 
@@ -291,7 +295,7 @@ static std::unique_ptr<ProcessingPipeline> create_pipeline()
 
 	pipeline->add_stage("baro_lowpass", std::make_unique<BiQuadFilterStage>(PARSE_TYPE_FLOAT, baroLowPassFilter));
 
-	pipeline->add_stage("baro_deriv", std::make_unique<DerivativeStage>(PARSE_TYPE_FLOAT, 5));
+	pipeline->add_stage("baro_deriv", std::make_unique<DerivativeStage>(PARSE_TYPE_FLOAT, 10));
 	pipeline->add_stage("abs_baro_deriv", std::make_unique<AbsoluteStage>(PARSE_TYPE_FLOAT));
 	pipeline->add_stage("baro_switch", std::make_unique<SwitchStage>(PARSE_TYPE_FLOAT, kBaroPressureRateThreshold, kBaroPressureRateThreshold));
 	

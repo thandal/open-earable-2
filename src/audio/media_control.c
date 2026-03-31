@@ -33,6 +33,8 @@ static const struct media_control_mapping gesture_action_map[] = {
 	{ MEDIA_CTRL_GESTURE_SINGLE_PRESS, MEDIA_CTRL_ACTION_PLAY_PAUSE_TOGGLE },
 	{ MEDIA_CTRL_GESTURE_DOUBLE_PRESS, MEDIA_CTRL_ACTION_NEXT_TRACK },
 	{ MEDIA_CTRL_GESTURE_TRIPLE_PRESS, MEDIA_CTRL_ACTION_PREV_TRACK },
+	{ MEDIA_CTRL_GESTURE_IN_EAR, MEDIA_CTRL_ACTION_PLAY },
+	{ MEDIA_CTRL_GESTURE_OUT_OF_EAR, MEDIA_CTRL_ACTION_PAUSE },
 };
 
 static int media_control_execute(enum media_control_action action)
@@ -55,6 +57,30 @@ static int media_control_execute(enum media_control_action action)
 
 	case MEDIA_CTRL_ACTION_PREV_TRACK:
 		return bt_content_ctrl_prev(NULL);
+
+	case MEDIA_CTRL_ACTION_PLAY:
+		if (IS_ENABLED(CONFIG_WALKIE_TALKIE_DEMO)) {
+			LOG_WRN("Play is not supported in walkie-talkie mode");
+			return -ENOTSUP;
+		}
+
+		if (bt_content_ctlr_media_state_playing()) {
+			return 0;
+		}
+
+		return bt_content_ctrl_start(NULL);
+
+	case MEDIA_CTRL_ACTION_PAUSE:
+		if (IS_ENABLED(CONFIG_WALKIE_TALKIE_DEMO)) {
+			LOG_WRN("Pause is not supported in walkie-talkie mode");
+			return -ENOTSUP;
+		}
+
+		if (!bt_content_ctlr_media_state_playing()) {
+			return 0;
+		}
+
+		return bt_content_ctrl_stop(NULL);
 
 	default:
 		return -EINVAL;
