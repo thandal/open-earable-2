@@ -5,7 +5,7 @@
 #include "processing_utils.h"
 
 #include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(division_stage, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(division_stage, LOG_LEVEL_INF);
 
 DivisionStage::DivisionStage(size_t in_ports, enum ParseType input_type, bool sync_channels, uint64_t threshold_us)
     : SensorProcessingStage(in_ports), parse_type(input_type), sync_channels(sync_channels), threshold_us(threshold_us) {

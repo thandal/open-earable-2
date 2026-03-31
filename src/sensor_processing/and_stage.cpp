@@ -2,7 +2,7 @@
 #include "processing_utils.h"
 
 #include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(and_stage, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(and_stage, LOG_LEVEL_INF);
 
 AndStage::AndStage(size_t in_ports, bool sync_timestamps, uint64_t threshold_us)
     : SensorProcessingStage(in_ports), sync_timestamps(sync_timestamps), threshold_us(threshold_us) {}
