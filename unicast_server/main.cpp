@@ -30,6 +30,7 @@
 #include "sensor_service.h"
 #include "led_service.h"
 #include "in_ear_detection_service.h"
+#include "../src/gesture_detection/gesture_detection_pipeline.h"
 #include "../src/in_ear_detection/wear_detection_pipeline.h"
 
 #include "SensorScheme.h"
@@ -127,6 +128,9 @@ int main(void) {
 	ERR_CHK(ret);
 
 	ret = in_ear_detection_pipeline_init();
+	ERR_CHK(ret);
+
+	ret = gesture_detection_pipeline_init();
 	ERR_CHK(ret);
 
 	ret = init_in_ear_detection_service();

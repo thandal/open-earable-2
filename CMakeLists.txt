@@ -47,6 +47,7 @@ zephyr_library_include_directories(
     src/Wire
     src/bluetooth
     src/drivers
+    src/gesture_detection
     src/modules
     src/utils
     src/utils/macros
@@ -79,6 +80,7 @@ add_subdirectory(src/SD_Card/SD_Card_Manager)
 add_subdirectory(src/time_sync)
 add_subdirectory(src/sensor_processing)
 add_subdirectory(src/in_ear_detection)
+add_subdirectory(src/gesture_detection)
 
 ## Cirrus Logic
 if (CONFIG_HW_CODEC_CIRRUS_LOGIC)

@@ -7,7 +7,7 @@
 
 #include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(in_ear_detection, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(in_ear_detection, LOG_LEVEL_INF);
 
 /*
  * Serialize read-modify-publish updates so change counters and transition
@@ -93,7 +93,7 @@ int in_ear_detection_publish(const struct in_ear_status_msg *status)
 int in_ear_detection_set_enabled(bool enabled, uint16_t source, uint16_t flags)
 {
 	LOG_DBG("Setting in-ear detection %s (source=%u, flags=0x%04x)", enabled ? "enabled" : "disabled", source, flags);
-	
+
 	struct in_ear_status_msg current;
 	struct in_ear_status_msg next;
 	int ret;

@@ -254,7 +254,6 @@ void in_ear_detection_pipeline_on_enabled_changed(bool enabled)
 		return;
 	}
 
-	apply_processing_consumer(ID_IMU, enabled, kImuSampleRateIdx);
 	apply_processing_consumer(ID_TEMP_BARO, enabled, kBaroSampleRateIdx);
 
 	if (k_mutex_lock(&wear_detection_ctx.lock, K_FOREVER) != 0) {

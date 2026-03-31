@@ -13,6 +13,7 @@
 #include "zbus_common.h"
 #include "openearable.h"
 #include "in_ear_detection.h"
+#include "gesture_detection.h"
 //#include "led.h"
 #include "button_assignments.h"
 #include "macros_common.h"
@@ -641,6 +642,9 @@ int streamctrl_start() //streamctrl_start
 	ERR_CHK(ret);
 
 	ret = in_ear_detection_init();
+	ERR_CHK(ret);
+
+	ret = gesture_detection_init();
 	ERR_CHK(ret);
 
 	ret = button_gesture_recognizer_init();
