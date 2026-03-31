@@ -48,11 +48,15 @@ enum in_ear_update_source {
  * ordering, provenance, or future extension points.
  */
 struct in_ear_status_msg {
+	/** Whether the detection framework is currently enabled. */
+	bool enabled;
+	/** Whether the framework was enabled before this update. */
+	bool previous_enabled;
 	/** Newly active in-ear state. */
 	enum in_ear_state state;
 	/** State that was active immediately before @ref state. */
 	enum in_ear_state previous_state;
-	/** Monotonic counter incremented on every accepted state change. */
+	/** Monotonic counter incremented on every accepted framework update. */
 	uint32_t change_counter;
 	/** Timestamp in microseconds when the state change was published. */
 	uint64_t timestamp_us;
@@ -72,6 +76,53 @@ struct in_ear_status_msg {
  * @retval 0 Initialization succeeded.
  */
 int in_ear_detection_init(void);
+
+/**
+ * @brief Check whether in-ear detection is currently enabled.
+ *
+ * @retval true Detection is enabled.
+ * @retval false Detection is disabled.
+ */
+bool in_ear_detection_is_enabled(void);
+
+/**
+ * @brief Enable or disable the in-ear detection framework.
+ *
+ * The framework publishes an update only if the effective enable state changes.
+ * Disabling detection does not discard the last wearing decision; consumers that
+ * care about freshness should inspect both @ref enabled and @ref state.
+ *
+ * @param enabled New enable state.
+ * @param source Producer identifier from @ref in_ear_update_source.
+ * @param flags Optional producer-specific flags.
+ *
+ * @retval 0 Enable handling completed successfully.
+ * @retval Negative error code if the current state could not be read or the new
+ *         status could not be published.
+ */
+int in_ear_detection_set_enabled(bool enabled, uint16_t source, uint16_t flags);
+
+/**
+ * @brief Convenience wrapper for enabling detection.
+ *
+ * @param source Producer identifier from @ref in_ear_update_source.
+ * @param flags Optional producer-specific flags.
+ *
+ * @retval 0 Detection was enabled or was already enabled.
+ * @retval Negative error code on failure.
+ */
+int in_ear_detection_enable(uint16_t source, uint16_t flags);
+
+/**
+ * @brief Convenience wrapper for disabling detection.
+ *
+ * @param source Producer identifier from @ref in_ear_update_source.
+ * @param flags Optional producer-specific flags.
+ *
+ * @retval 0 Detection was disabled or was already disabled.
+ * @retval Negative error code on failure.
+ */
+int in_ear_detection_disable(uint16_t source, uint16_t flags);
 
 /**
  * @brief Get the current global wearing state.
@@ -108,6 +159,7 @@ int in_ear_detection_get(struct in_ear_status_msg *status);
  *
  * The framework updates the transition metadata automatically. If the requested
  * state already matches the current one, no new zbus event is emitted.
+ * If detection is disabled, the call is ignored and succeeds without publishing.
  *
  * This is the preferred entry point for detection logic implemented in sensor
  * processing pipelines or other producers.

@@ -21,6 +21,8 @@ K_MUTEX_DEFINE(in_ear_detection_lock);
  */
 ZBUS_CHAN_DEFINE(in_ear_detection_chan, struct in_ear_status_msg, NULL, NULL, ZBUS_OBSERVERS_EMPTY,
 		 ZBUS_MSG_INIT(
+			 .enabled = true,
+			 .previous_enabled = true,
 			 .state = IN_EAR_STATE_UNKNOWN,
 			 .previous_state = IN_EAR_STATE_UNKNOWN,
 			 .change_counter = 0,
@@ -40,6 +42,19 @@ static int in_ear_detection_read_current(struct in_ear_status_msg *status)
 int in_ear_detection_init(void)
 {
 	return 0;
+}
+
+bool in_ear_detection_is_enabled(void)
+{
+	struct in_ear_status_msg status;
+	int ret = in_ear_detection_read_current(&status);
+
+	if (ret != 0) {
+		LOG_WRN("Failed to read in-ear enable state: %d", ret);
+		return false;
+	}
+
+	return status.enabled;
 }
 
 enum in_ear_state in_ear_detection_state(void)
@@ -74,6 +89,52 @@ int in_ear_detection_publish(const struct in_ear_status_msg *status)
 	return zbus_chan_pub(&in_ear_detection_chan, status, K_FOREVER);
 }
 
+int in_ear_detection_set_enabled(bool enabled, uint16_t source, uint16_t flags)
+{
+	struct in_ear_status_msg current;
+	struct in_ear_status_msg next;
+	int ret;
+
+	ret = k_mutex_lock(&in_ear_detection_lock, K_FOREVER);
+	if (ret != 0) {
+		return ret;
+	}
+
+	ret = in_ear_detection_read_current(&current);
+	if (ret != 0) {
+		goto done;
+	}
+
+	if (current.enabled == enabled) {
+		ret = 0;
+		goto done;
+	}
+
+	next = current;
+	next.previous_enabled = current.enabled;
+	next.enabled = enabled;
+	next.source = source;
+	next.flags = flags;
+	next.timestamp_us = oe_micros();
+	next.change_counter = current.change_counter + 1U;
+
+	ret = in_ear_detection_publish(&next);
+
+done:
+	k_mutex_unlock(&in_ear_detection_lock);
+	return ret;
+}
+
+int in_ear_detection_enable(uint16_t source, uint16_t flags)
+{
+	return in_ear_detection_set_enabled(true, source, flags);
+}
+
+int in_ear_detection_disable(uint16_t source, uint16_t flags)
+{
+	return in_ear_detection_set_enabled(false, source, flags);
+}
+
 int in_ear_detection_set_state(enum in_ear_state state, uint16_t source, uint16_t flags)
 {
 	struct in_ear_status_msg current;
@@ -87,6 +148,11 @@ int in_ear_detection_set_state(enum in_ear_state state, uint16_t source, uint16_
 
 	ret = in_ear_detection_read_current(&current);
 	if (ret != 0) {
+		goto done;
+	}
+
+	if (!current.enabled) {
+		ret = 0;
 		goto done;
 	}
 

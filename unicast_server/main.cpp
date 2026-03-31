@@ -28,6 +28,7 @@
 #include "button_service.h"
 #include "sensor_service.h"
 #include "led_service.h"
+#include "in_ear_detection_service.h"
 
 #include "SensorScheme.h"
 #include "DefaultSensors.h"
@@ -118,6 +119,9 @@ int main(void) {
 	ERR_CHK(ret);
 
 	ret = init_sensor_service();
+	ERR_CHK(ret);
+
+	ret = init_in_ear_detection_service();
 	ERR_CHK(ret);
 
 	ret = sensor_processing_consumer_init();
