@@ -4,6 +4,9 @@
 
 #include "processing_utils.h"
 
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(division_stage, LOG_LEVEL_DBG);
+
 DivisionStage::DivisionStage(size_t in_ports, enum ParseType input_type, bool sync_channels, uint64_t threshold_us)
     : SensorProcessingStage(in_ports), parse_type(input_type), sync_channels(sync_channels), threshold_us(threshold_us) {
 }
@@ -19,6 +22,7 @@ int divide_values(const struct sensor_data *const input[], size_t in_ports, doub
         if (divisor == 0.0) {
             return -EDOM;
         }
+        LOG_DBG("DivisionStage: dividing %.2f by %.2f", quotient, divisor);
         quotient /= divisor;
     }
 

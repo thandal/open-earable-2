@@ -5,8 +5,8 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(switch_stage, LOG_LEVEL_WRN);
 
-SwitchStage::SwitchStage(enum ParseType type, float low_thresh, float high_thresh)
-    : SensorProcessingStage(1), parse_type(type), low_threshold(low_thresh), high_threshold(high_thresh) {}
+SwitchStage::SwitchStage(enum ParseType type, float low_thresh, float high_thresh, bool send_changes_only)
+    : SensorProcessingStage(1), parse_type(type), low_threshold(low_thresh), high_threshold(high_thresh), send_changes_only(send_changes_only) {}
 
 SwitchStage::~SwitchStage() {}
 
@@ -55,7 +55,7 @@ int SwitchStage::process(const struct sensor_data *const input[], struct sensor_
         new_state = 1;
     }
 
-    if (new_state == current_state) {
+    if (!send_changes_only && (new_state == current_state)) {
         return 1; // no state change
     }
 

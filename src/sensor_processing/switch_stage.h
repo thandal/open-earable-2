@@ -6,7 +6,7 @@
 
 class SwitchStage : public SensorProcessingStage {
 public:
-    SwitchStage(enum ParseType type, float low_thresh, float high_thresh);
+    SwitchStage(enum ParseType type, float low_thresh, float high_thresh, bool send_changes_only = false);
     ~SwitchStage() override;
 
     int process(const struct sensor_data *const input[], struct sensor_data *output) override;
@@ -18,6 +18,7 @@ private:
 
     const float low_threshold;
     const float high_threshold;
+    const bool send_changes_only;
 };
 
 #endif // _SWITCH_STAGE_H
