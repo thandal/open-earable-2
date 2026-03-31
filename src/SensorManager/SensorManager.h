@@ -28,6 +28,9 @@ void start_sensor_manager();
 void stop_sensor_manager();
 
 void config_sensor(struct sensor_config * config);
+int get_sensor_configuration(uint8_t sensor_id, struct sensor_config *config_out);
+int update_sensor_consumer_state(uint8_t sensor_id, uint8_t consumer_mask, bool enabled,
+                                 uint8_t preferred_sample_rate_idx);
 
 #ifdef __cplusplus
 }

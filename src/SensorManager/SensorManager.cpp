@@ -1,5 +1,6 @@
 #include "SensorManager.h"
 
+#include <errno.h>
 #include <zephyr/kernel.h>
 
 #include "macros_common.h"
@@ -21,6 +22,7 @@
 #include "../SD_Card/SDLogger/SDLogger.h"
 #include <string>
 #include <set>
+#include <map>
 
 #include "audio_datapath.h"
 
@@ -32,6 +34,7 @@ LOG_MODULE_DECLARE(sensor_manager);
 
 std::set<int> ble_sensors = {};
 std::set<int> sd_sensors = {};
+static std::map<uint8_t, struct sensor_config> sensor_configs = {};
 
 //extern struct k_msgq sensor_queue;
 
@@ -86,6 +89,7 @@ void init_sensor_manager() {
 	_state = INIT;
 
 	active_sensors = 0;
+	sensor_configs.clear();
 
 	k_work_queue_init(&sensor_work_q);
 
@@ -247,6 +251,7 @@ static void config_work_handler(struct k_work *work) {
 	}
 
 	set_sensor_config_status(config);
+	sensor_configs[config.sensorId] = config;
 
 	if (active_sensors == 0) stop_sensor_manager();
 }
@@ -261,4 +266,53 @@ void config_sensor(struct sensor_config * config) {
 	//k_work_queue_drain(&sensor_work_q, true);
 	k_work_submit(&config_work);
 	//k_work_queue_unplug(&sensor_work_q);
+}
+
+int get_sensor_configuration(uint8_t sensor_id, struct sensor_config *config_out) {
+	if (config_out == NULL) {
+		return -EINVAL;
+	}
+
+	auto it = sensor_configs.find(sensor_id);
+	if (it != sensor_configs.end()) {
+		*config_out = it->second;
+		return 0;
+	}
+
+	struct SensorScheme *scheme = getSensorSchemeForId(sensor_id);
+	if (scheme == NULL) {
+		return -ENOENT;
+	}
+
+	config_out->sensorId = sensor_id;
+	config_out->sampleRateIndex = scheme->configOptions.frequencyOptions.defaultFrequencyIndex;
+	config_out->storageOptions = 0;
+	return 0;
+}
+
+int update_sensor_consumer_state(uint8_t sensor_id, uint8_t consumer_mask, bool enabled,
+				 uint8_t preferred_sample_rate_idx) {
+	struct sensor_config config;
+	int ret = get_sensor_configuration(sensor_id, &config);
+
+	if (ret != 0) {
+		return ret;
+	}
+
+	const uint8_t previous_options = config.storageOptions;
+	if (enabled) {
+		if (config.storageOptions == 0) {
+			config.sampleRateIndex = preferred_sample_rate_idx;
+		}
+		config.storageOptions |= consumer_mask;
+	} else {
+		config.storageOptions &= ~consumer_mask;
+	}
+
+	if (config.storageOptions == previous_options) {
+		return 0;
+	}
+
+	config_sensor(&config);
+	return 0;
 }

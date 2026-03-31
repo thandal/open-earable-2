@@ -25,6 +25,17 @@ Consumers can:
 - Call `in_ear_detection_get(...)` to inspect the full status snapshot.
 - Subscribe to `in_ear_detection_chan` or use `in_ear_detection_subscribe(...)` to receive change notifications.
 
+## Built-in wear pipeline
+
+The current pipeline in :file:`src/in_ear_detection/wear_detection_pipeline.cpp` implements a trigger-based cascaded classifier:
+
+- IMU motion spikes or rapid barometric pressure changes arm a short PPG capture window.
+- PPG is enabled only for that short window through the sensor manager's processing consumer bit.
+- The optical classifier checks for the requested spectral signature:
+  green highest, red below green, IR below red, ambient very low.
+- The classifier stage outputs a wearing-state decision sample.
+- A dedicated trigger sink consumes that decision and updates the shared state to `IN_EAR_STATE_WORN` or `IN_EAR_STATE_NOT_WORN`.
+
 ## Bluetooth integration
 
 The GATT service in :file:`src/bluetooth/gatt_services/in_ear_detection_service.c` exposes three characteristics:

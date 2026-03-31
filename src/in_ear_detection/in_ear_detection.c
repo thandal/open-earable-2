@@ -3,6 +3,7 @@
 #include <errno.h>
 
 #include "openearable_common.h"
+#include "wear_detection_pipeline.h"
 
 #include <zephyr/logging/log.h>
 
@@ -94,6 +95,7 @@ int in_ear_detection_set_enabled(bool enabled, uint16_t source, uint16_t flags)
 	struct in_ear_status_msg current;
 	struct in_ear_status_msg next;
 	int ret;
+	bool changed = false;
 
 	ret = k_mutex_lock(&in_ear_detection_lock, K_FOREVER);
 	if (ret != 0) {
@@ -117,11 +119,15 @@ int in_ear_detection_set_enabled(bool enabled, uint16_t source, uint16_t flags)
 	next.flags = flags;
 	next.timestamp_us = oe_micros();
 	next.change_counter = current.change_counter + 1U;
+	changed = true;
 
 	ret = in_ear_detection_publish(&next);
 
 done:
 	k_mutex_unlock(&in_ear_detection_lock);
+	if (ret == 0 && changed) {
+		in_ear_detection_pipeline_on_enabled_changed(enabled);
+	}
 	return ret;
 }
 
