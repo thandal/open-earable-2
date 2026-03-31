@@ -18,12 +18,12 @@ extern "C" {
  * depend on it without being coupled to a specific detection algorithm.
  */
 enum in_ear_state {
-	/** Detection has not produced a usable decision yet. */
-	IN_EAR_STATE_UNKNOWN = 0,
 	/** The device is currently considered not worn. */
-	IN_EAR_STATE_NOT_WORN,
+	IN_EAR_STATE_NOT_WORN = 0,
 	/** The device is currently considered worn. */
-	IN_EAR_STATE_WORN,
+	IN_EAR_STATE_WORN = 1,
+	/** Detection has not produced a usable decision yet. */
+	IN_EAR_STATE_UNKNOWN = 2,
 };
 
 /**

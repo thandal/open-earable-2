@@ -9,7 +9,7 @@
 #include <zephyr/zbus/zbus.h>
 #include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(sensor_activity_policy, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(sensor_activity_policy, LOG_LEVEL_INF);
 
 static void sensor_config_evt_handler(const struct zbus_channel *chan);
 ZBUS_LISTENER_DEFINE(sensor_config_evt_listen, sensor_config_evt_handler);
