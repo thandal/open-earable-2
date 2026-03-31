@@ -22,6 +22,7 @@
 #include "../src/Battery/PowerManager.h"
 #include "../src/SensorManager/SensorManager.h"
 #include "../src/utils/StateIndicator.h"
+#include "../src/utils/sensor_activity_policy.h"
 
 #include "device_info.h"
 #include "battery_service.h"
@@ -117,6 +118,9 @@ int main(void) {
 	ERR_CHK(ret);
 
 	ret = initParseInfoService(&defaultSensorIds, defaultSensors);
+	ERR_CHK(ret);
+
+	ret = sensor_activity_policy_init();
 	ERR_CHK(ret);
 
 	ret = init_sensor_service();
