@@ -6,6 +6,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/zbus/zbus.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,6 +19,7 @@ enum sensor_manager_state {
 };
 
 extern struct k_work_q sensor_work_q;
+ZBUS_CHAN_DECLARE(sensor_config_chan);
 
 enum sensor_manager_state get_state();
 

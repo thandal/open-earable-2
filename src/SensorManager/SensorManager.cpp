@@ -49,6 +49,8 @@ K_THREAD_STACK_DEFINE(sensor_work_q_stack, CONFIG_SENSOR_WORK_QUEUE_STACK_SIZE);
 
 ZBUS_CHAN_DEFINE(sensor_chan, struct sensor_msg, NULL, NULL, ZBUS_OBSERVERS_EMPTY,
 		 ZBUS_MSG_INIT(0));
+ZBUS_CHAN_DEFINE(sensor_config_chan, struct sensor_config, NULL, NULL, ZBUS_OBSERVERS_EMPTY,
+		 ZBUS_MSG_INIT(0));
 
 static struct k_poll_signal sensor_manager_sig;
 static struct k_poll_event sensor_manager_evt =
@@ -252,6 +254,10 @@ static void config_work_handler(struct k_work *work) {
 
 	set_sensor_config_status(config);
 	sensor_configs[config.sensorId] = config;
+	ret = zbus_chan_pub(&sensor_config_chan, &config, K_NO_WAIT);
+	if (ret != 0) {
+		LOG_WRN("Failed to publish sensor config update: %d", ret);
+	}
 
 	if (active_sensors == 0) stop_sensor_manager();
 }
