@@ -132,6 +132,11 @@ The following figure illustrates the software layout for the nRF5340 Audio appli
 
 Communication between modules is primarily done through Zephyr's :ref:`zephyr:zbus` to make sure that there are as few dependencies as possible. Each of the buses used by the applications has their message structures described in :file:`zbus_common.h`.
 
+The repository also contains dedicated infrastructure modules layered on top of zbus for cross-cutting features.
+For example, the in-ear detection framework in :file:`src/in_ear_detection/` owns the global "currently worn" state,
+exposes synchronous query helpers, and publishes wearing-state transitions on its own zbus channel so detection producers
+and feature consumers remain decoupled.
+
 .. _nrf53_audio_app_overview_architecture_usb:
 
 USB-based firmware for gateway
