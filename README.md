@@ -22,7 +22,7 @@
 1. **Install Visual Studio Code (VS Code)**  
    - Download and install from [https://code.visualstudio.com](https://code.visualstudio.com).
 
-2. **Install the J‑Link Software and Documentation Package**
+2. **[OPTIONAL: JLINK FLASHING] Install the J‑Link Software and Documentation Package**
    - Download and install from [https://www.segger.com/downloads/jlink/](https://www.segger.com/downloads/jlink/).
      
 3. **Install nRF-Util**  
@@ -63,7 +63,7 @@
         - Select `prj.conf` as the `Base configuration files (Kconfig fragments)`.
         - Do not set any of the FOTA flags described above.
     
-9. **J-Link Setup**
+9. **OPTIONAL: J-Link Setup**
    - Wire your J-Link to the debugging breakout PCB as shown below.
    ![image](https://github.com/user-attachments/assets/2eeec41e-6be1-4a4f-b986-7d9a07b0f8e5)
    - If you do not own a J-Link yet, here are a few options (do **NOT** use J-Link clones, they will not work and are illegal!):
@@ -74,6 +74,8 @@
 11. **Build and Flash**
    - Click on `Generate and Build` and wait for the application to build (this will take some time)
    - Make sure your device is charged or powered via USB. If the battery is fully discharged, the charging management IC will no longer supply power to the MCU from the battery, so you won’t be able to flash the MCU unless the battery is charged or the device is directly powered via USB.
+
+   **[JLINK FLASHING]**
    - Open a new terminal in VS Code and run the following command from the root of the `open-earable-v2` directory to flash the FOTA build. Make sure to set the serial number of your J-Link (right click your J-Link in the `CONNECTED DEVICES` tab of the nRF connect extension and copy the serial number).
    ```bash
    # --right for the right ear device, or no flag to retain left/right bonding, --standalone for no pair   
@@ -90,6 +92,32 @@
    ```
      
    - The FOTA update script is also available for Windows as `./tools/flash/flash_fota.ps1`. To execute it, open PowerShell with administrative privileges.
+
+   **[FOTA FLASHING via the Phone App]**
+   - Charge to ~80% or more, unplug the earbud
+   - Copy build/dfu_application.zip to your phone (either plug your phone is and transfer via USB, or upload it to Google Drive, or however)
+   - Open the OpenEarable app on your phone
+   - Connect to the device, and click the update button next to the firmware
+   - Click the "+" button to add a custom firmware
+   - Select the dfu_application.zip file
+   - Click through to flash the firmware
+   - (wait for the little red light *inside* the earbud to stop flashing)
+
+   **[SERIAL FLASHING via USB]**
+   - Requires a **FOTA build** (MCUboot must be enabled). Install prerequisites:
+   ```bash
+   nrfutil install mcu-manager
+   ```
+   - Power off the device
+   - Remove any SD card (the SD card conflicts with the USB serial port!)
+   - Power on the device
+   - Plug in the device via USB, verify that you see the serial port appear (for example /dev/ttyACM0)
+   - Use the provided script, which uploads both app and network core images, marks them for testing, and resets the device:
+   ```bash
+   ./tools/flash/mcu-manager_upload.sh
+   ```
+   - You may need to edit the serial port in the script (default: `/dev/ttyACM0`).
+
 
 11. **Recover Board**
    - If the application or network core becomes unresponsive, or you encounter flashing issues, you can recover the board using the recovery script. The `--snr` parameter specifies the serial number of your J-Link debugger.
