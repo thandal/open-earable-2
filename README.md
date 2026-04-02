@@ -152,6 +152,8 @@
       ```
    - After successful recovery, you can attempt to flash the firmware again (you will have to restore left/right bonding and hardware version).
 
+## Mounting the SD Card over USB-C
+Connect the device to USB-C, and then press the reset button to power-cycle the device. When it comes up, it should mount!
 
 
 ## Battery States
