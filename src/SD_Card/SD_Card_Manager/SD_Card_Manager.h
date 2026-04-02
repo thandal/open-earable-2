@@ -22,6 +22,9 @@ public:
     SDCardManager();
     ~SDCardManager();
 
+    int aquire_ls();
+    int release_ls();
+
     void init();
 
     /**
@@ -187,9 +190,6 @@ private:
     static k_work_delayable unmount_work;
 
     static void unmount_work_handler(struct k_work *work);
-
-    int aquire_ls();
-    int release_ls();
 
     bool ls_aquired = false;
 

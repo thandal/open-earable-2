@@ -10,18 +10,17 @@
 #include <zephyr/usb/usb_device.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/shell/shell_uart.h>
-
-//#include "../src/modules/sd_card.h"
-
 #include <zephyr/settings/settings.h>
+#include <zephyr/logging/log.h>
 
 #include "macros_common.h"
 #include "openearable_common.h"
 #include "streamctrl.h"
-
-#include "../src/Battery/PowerManager.h"
-#include "../src/SensorManager/SensorManager.h"
-#include "../src/utils/StateIndicator.h"
+#include "uicr.h"
+#include "bt_mgmt.h"
+#include "bt_mgmt_conn_interval.h"
+#include "conn_interval/conn_intvl_linear.h"
+#include "time_sync.h"
 
 #include "device_info.h"
 #include "battery_service.h"
@@ -32,29 +31,11 @@
 #include "SensorScheme.h"
 #include "DefaultSensors.h"
 
-#include "time_sync.h"
+#include "../src/Battery/PowerManager.h"
+#include "../src/SensorManager/SensorManager.h"
+#include "../src/utils/StateIndicator.h"
 
-#include "../src/SD_Card/SDLogger/SDLogger.h"
-
-#include "uicr.h"
-
-#include "streamctrl.h"
-
-#include "bt_mgmt.h"
-
-#include "bt_mgmt_conn_interval.h"
-#include "conn_interval/conn_intvl_linear.h"
-
-//#include "sd_card.h"
-
-#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(main, CONFIG_MAIN_LOG_LEVEL);
-//BUILD_ASSERT(DT_NODE_HAS_COMPAT(DT_CHOSEN(zephyr_console), zephyr_cdc_acm_uart),
-//	     "Console device is not ACM CDC UART device");
-
-/* STEP 5.4 - Include header for USB */
-#include <zephyr/usb/usb_device.h>
-
 
 int main(void) {
 	int ret;
@@ -65,14 +46,8 @@ int main(void) {
 	ERR_CHK(ret);
 
 	uint8_t standalone = uicr_standalone_get();
-
 	LOG_INF("Standalone mode: %i", standalone);
 
-	/*sdcard_manager.init();
-
-	sdcard_manager.mount();*/
-
-	/* STEP 5.5 - Enable USB */
 	if (IS_ENABLED(CONFIG_USB_DEVICE_STACK)) {
 		ret = usb_enable(NULL);
 		if (ret) {
@@ -95,17 +70,7 @@ int main(void) {
 
 	init_sensor_manager();
 
-	//sensor_config imu = {ID_IMU, 80, 0};
-	//sensor_config imu = {ID_PPG, 400, 0};
-	//sensor_config temp = {ID_OPTTEMP, 10, 0};
-	// sensor_config temp = {ID_BONE_CONDUCTION, 100, 0};
-
-	//config_sensor(&temp);
-
-	//sensor_config ppg = {ID_PPG, 400, 0};
-	//config_sensor(&ppg);
-
-    ret = init_led_service();
+	ret = init_led_service();
 	ERR_CHK(ret);
 
 	ret = init_battery_service();
@@ -128,10 +93,6 @@ int main(void) {
 
 	ret = init_time_sync();
 	ERR_CHK(ret);
-
-	// error test
-	//long *a = nullptr;
-	//*a = 10;
 
 	return 0;
 }
