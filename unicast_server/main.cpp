@@ -7,11 +7,21 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
-#include <zephyr/usb/usb_device.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/shell/shell_uart.h>
 #include <zephyr/settings/settings.h>
+#include <zephyr/storage/disk_access.h>
 #include <zephyr/logging/log.h>
+
+#if defined(CONFIG_USB_DEVICE_STACK_NEXT)
+#include <zephyr/usb/usbd.h>
+#include <zephyr/usb/class/usbd_msc.h>
+extern "C" {
+#include <sample_usbd.h>
+}
+#else
+#include <zephyr/usb/usb_device.h>
+#endif
 
 #include "macros_common.h"
 #include "openearable_common.h"
@@ -37,6 +47,11 @@
 
 LOG_MODULE_REGISTER(main, CONFIG_MAIN_LOG_LEVEL);
 
+#if defined(CONFIG_USB_DEVICE_STACK_NEXT)
+/* Register SD card as a USB Mass Storage LUN */
+USBD_DEFINE_MSC_LUN(sd, "SD", "OpenEarable", "SD Card", "1.00");
+#endif
+
 int main(void) {
 	int ret;
 
@@ -48,13 +63,28 @@ int main(void) {
 	uint8_t standalone = uicr_standalone_get();
 	LOG_INF("Standalone mode: %i", standalone);
 
-	if (IS_ENABLED(CONFIG_USB_DEVICE_STACK)) {
-		ret = usb_enable(NULL);
-		if (ret) {
-			LOG_ERR("Failed to enable USB");
-			return 0;
+#if defined(CONFIG_USB_DEVICE_STACK_NEXT)
+	{
+		/* Initialize SD card before USB so MSC can report media present */
+		disk_access_init("SD");
+
+		struct usbd_context *usbd = sample_usbd_init_device(NULL);
+		if (usbd == NULL) {
+			LOG_ERR("Failed to initialize USB device");
+		} else {
+			ret = usbd_enable(usbd);
+			if (ret) {
+				LOG_ERR("Failed to enable USB: %d", ret);
+			}
 		}
 	}
+#elif defined(CONFIG_USB_DEVICE_STACK)
+	ret = usb_enable(NULL);
+	if (ret) {
+		LOG_ERR("Failed to enable USB");
+		return 0;
+	}
+#endif
 
 	streamctrl_start();
 

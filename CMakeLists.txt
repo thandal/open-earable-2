@@ -89,3 +89,8 @@ endif()
 
 include(version.cmake)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
+
+# New USB device stack sample init (provides sample_usbd_init_device)
+if(CONFIG_USB_DEVICE_STACK_NEXT)
+    include(${ZEPHYR_BASE}/samples/subsys/usb/common/common.cmake)
+endif()
