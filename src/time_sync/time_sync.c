@@ -8,6 +8,8 @@
 #include <zephyr/sys/byteorder.h>
 #include <string.h>
 #include <limits.h>
+#include <time.h>
+#include <ff.h>
 
 #include "openearable_common.h"
 
@@ -177,6 +179,21 @@ void rtt_cfg_changed(const struct bt_gatt_attr *attr,
     notify_rtt_enabled = (value == BT_GATT_CCC_NOTIFY);
 }
 
+
+DWORD get_fattime(void)
+{
+    uint64_t now_us = get_current_time_us();
+    time_t secs = (time_t)(now_us / 1000000ULL);
+    struct tm tm;
+    gmtime_r(&secs, &tm);
+
+    return ((DWORD)(tm.tm_year - 80) << 25) |
+           ((DWORD)(tm.tm_mon + 1) << 21) |
+           ((DWORD)tm.tm_mday << 16) |
+           ((DWORD)tm.tm_hour << 11) |
+           ((DWORD)tm.tm_min << 5) |
+           ((DWORD)(tm.tm_sec / 2));
+}
 
 BT_GATT_SERVICE_DEFINE(time_sync_service,
     BT_GATT_PRIMARY_SERVICE(BT_UUID_TIME_SYNC_SERVICE),
