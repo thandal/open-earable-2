@@ -112,7 +112,7 @@
    - Remove any SD card (the SD card conflicts with the USB serial port!)
    - Power on the device
    - Plug in the device via USB, verify that you see the serial port appear (for example /dev/ttyACM0)
-   - Use the provided script, which uploads both app and network core images, marks them for testing, and resets the device:
+   - Use the mcu-manager_upload.sh script, which uploads both app and network core images, marks them for testing, and resets the device:
    ```bash
    ./tools/flash/mcu-manager_upload.sh
    ```
