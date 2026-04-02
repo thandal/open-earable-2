@@ -333,11 +333,14 @@ int PowerManager::begin() {
 
     if (charging) {
         power_manager.last_charging_state = 0;
-        
+
         int ret = pm_device_runtime_enable(ls_1_8);
         if (ret != 0) {
             LOG_WRN("Error setting up load switch 1.8V.");
         }
+        /* Immediately resume — V_LS powers the SPI level shifter; even a
+         * brief drop corrupts the SD card's SPI state. */
+        pm_device_runtime_get(ls_1_8);
 
         ret = pm_device_runtime_enable(ls_3_3);
         if (ret != 0) {
@@ -389,6 +392,12 @@ int PowerManager::begin() {
     if (ret != 0) {
         LOG_WRN("Error setting up load switch SD.");
     }
+
+    /* Keep the SPI level shifter (ls_1_8) and SD card (ls_sd) powered.
+     * ls_1_8 powers the SPI level shifter (U10) needed for SD card access.
+     * Without these, the MSC SYS_INIT's SD card init becomes invalid. */
+    pm_device_runtime_get(ls_1_8);
+    pm_device_runtime_get(ls_sd);
 
     ret = device_is_ready(error_led.port); //bool
     if (!ret) {
