@@ -176,7 +176,7 @@ static struct k_msgq * sensor_queue;
 //extern struct audio_data fifo_rx;
 
 //K_MSGQ_DEFINE(rx_queue, sizeof(struct audio_data), 16, 4);
-extern struct k_msgq_t encoder_queue;
+extern struct k_msgq encoder_queue;
 
 // Definition eines zbus-Kanals
 ZBUS_CHAN_DEFINE(audio_channel, struct audio_data, NULL, NULL, ZBUS_OBSERVERS_EMPTY, ZBUS_MSG_INIT(0));
@@ -245,7 +245,7 @@ static void data_thread(void *arg1, void *arg2, void *arg3)
 					audio_item.data + (i * BLOCK_SIZE_BYTES)
 				};
 
-				sdlogger_write_data(&data_ptrs, data_size, 2);
+				sdlogger_write_data(data_ptrs, data_size, 2);
 
 				//sdlogger_write_data(&audio_msg.data, data_size);
 				//sdlogger_write_data(audio_item.data + (i * BLOCK_SIZE_BYTES), BLOCK_SIZE_BYTES);

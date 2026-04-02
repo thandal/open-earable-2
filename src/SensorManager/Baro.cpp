@@ -51,7 +51,7 @@ void Baro::update_sensor(struct k_work *work) {
 	msg_baro.data.size = 2 * sizeof(float);
 	msg_baro.data.time = micros();
 
-	float data[2] = {bmp.temperature, bmp.pressure};
+	float data[2] = {(float)bmp.temperature, (float)bmp.pressure};
 
 	memcpy(msg_baro.data.data, data, 2 * sizeof(float));
 
