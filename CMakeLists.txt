@@ -45,6 +45,7 @@ zephyr_library_include_directories(
     include
     src/audio
     src/Battery
+    src/buttons
     src/Wire
     src/bluetooth
     src/drivers
