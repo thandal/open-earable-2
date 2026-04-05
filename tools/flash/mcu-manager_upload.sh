@@ -1,18 +1,25 @@
 #!/bin/bash
 
-MGR_CMD="nrfutil mcu-manager serial --serial-port /dev/ttyACM0"
+MGR_CMD="nrfutil mcu-manager serial --serial-port port=/dev/ttyACM0,baud_rate=57600"
 
-$MGR_CMD image-upload --firmware build/open-earable-2/zephyr/zephyr.signed.bin
-$MGR_CMD image-upload --firmware build/signed_by_mcuboot_and_b0_ipc_radio.bin
+HASH_APP="$(sha256sum build/open-earable-2/zephyr/zephyr.signed.bin | cut -d' ' -f1)"
+HASH_NET="$(sha256sum build/signed_by_mcuboot_and_b0_ipc_radio.bin | cut -d' ' -f1)"
+echo "Hash APP: $HASH_APP"
+echo "Hash NET: $HASH_NET"
 
-# Get hashes from image list
-IMAGE_LIST=$($MGR_CMD image-list)
-HASH_APP=$(echo "$IMAGE_LIST" | grep "hash: " | sed -n 2p | cut -d" " -f6)
-HASH_NET=$(echo "$IMAGE_LIST" | grep "hash: " | sed -n 3p | cut -d" " -f6)
+echo "Current images:"
+$MGR_CMD image-list
 
-# Test both images with their hashes
-$MGR_CMD image-test --hash $HASH_APP
-$MGR_CMD image-test --hash $HASH_NET
+# BEST OPTION!
+#$MGR_CMD image-upload --firmware build/dfu_application.zip --mtu 256
+
+# I think I can only upload the app image?
+$MGR_CMD image-erase
+$MGR_CMD image-upload --firmware build/open-earable-2/zephyr/zephyr.signed.bin --mtu 128
+$MGR_CMD image-test --hash $HASH_APP && $MGR_CMD image-confirm 
+
+#$MGR_CMD image-upload --firmware build/signed_by_mcuboot_and_b0_ipc_radio.bin --image-number 1
+#$MGR_CMD image-test --hash $HASH_NET && $MGR_CMD image-confirm 
 
 echo "Resetting device..."
 

@@ -1,8 +1,12 @@
 #!/bin/bash
 
 # Default parameters
-CLOCKSPEED=8000
-CHIP=NRF53
+CLOCKSPEED=4000
+FAMILY=nrf53
+
+# UICR address range for nRF5340
+UICR_ADDR=0x00FF8000
+UICR_SIZE=4096
 
 # Function to show usage
 show_usage() {
@@ -80,40 +84,43 @@ if [ "$STANDALONE" == true ] && [ -z "$LEFT" ] && [ -z "$RIGHT" ]; then
     show_usage
 fi
 
+# Common nrfutil options
+NRFUTIL_OPTS="--serial-number $SNR --family $FAMILY --swd-clock-frequency $CLOCKSPEED"
+
 # Backup UICR if neither left nor right is specified
 if [ -z "$LEFT" ] && [ -z "$RIGHT" ]; then
-    nrfjprog --readuicr ./tools/flash/uicr_backup.hex -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED
+    nrfutil device read --address $UICR_ADDR --bytes $UICR_SIZE --to-file ./tools/flash/uicr_backup.hex $NRFUTIL_OPTS
 fi
 
 # Flash network core (CPUNET)
-nrfjprog --program ./build_fota/merged_CPUNET.hex --chiperase --verify -f $CHIP --coprocessor CP_NETWORK --snr $SNR --clockspeed $CLOCKSPEED
+nrfutil device program --firmware ./build/merged_CPUNET.hex --core network --options chip_erase_mode=ERASE_ALL,verify=VERIFY_READ $NRFUTIL_OPTS
 
 # Flash application core (CPUAPP)
-nrfjprog --program ./build_fota/merged.hex --chiperase --verify -f $CHIP --coprocessor CP_APPLICATION --snr $SNR --clockspeed $CLOCKSPEED
+nrfutil device program --firmware ./build/merged.hex --core application --options chip_erase_mode=ERASE_ALL,verify=VERIFY_READ $NRFUTIL_OPTS
 
 # Restore UICR if neither left nor right is specified
 if [ -z "$LEFT" ] && [ -z "$RIGHT" ]; then
-    nrfjprog --program ./tools/flash/uicr_backup.hex -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED --verify
+    nrfutil device program --firmware ./tools/flash/uicr_backup.hex --options chip_erase_mode=ERASE_NONE,verify=VERIFY_READ $NRFUTIL_OPTS
 fi
 
 # Set left/right configuration
 if [ "$LEFT" == true ]; then
-    nrfjprog --memwr 0x00FF80F4 --val 0 -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED
+    nrfutil device write --address 0x00FF80F4 --value 0 $NRFUTIL_OPTS
 elif [ "$RIGHT" == true ]; then
-    nrfjprog --memwr 0x00FF80F4 --val 1 -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED
+    nrfutil device write --address 0x00FF80F4 --value 1 $NRFUTIL_OPTS
 fi
 
 # Set standalone mode configuration if requested
 if [ "$STANDALONE" == true ]; then
-    nrfjprog --memwr 0x00FF80FC --val 0 -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED
+    nrfutil device write --address 0x00FF80FC --value 0 $NRFUTIL_OPTS
     echo "Device configured for standalone mode"
 fi
 
 # Set hardware version if provided
 if [ -n "$HW_VERSION" ]; then
-    nrfjprog --memwr 0x00FF8100 --val $HW_VALUE -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED
+    nrfutil device write --address 0x00FF8100 --value $HW_VALUE $NRFUTIL_OPTS
     echo "Hardware version set to $HW_VERSION"
 fi
 
 # Reset device
-nrfjprog --reset -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED
+nrfutil device reset $NRFUTIL_OPTS
