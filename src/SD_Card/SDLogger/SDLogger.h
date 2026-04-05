@@ -10,7 +10,7 @@
 
 
 constexpr size_t SD_BLOCK_SIZE = 4096;
-constexpr size_t BUFFER_BLOCK_COUNT = 8; // Number of blocks in the buffer
+constexpr size_t BUFFER_BLOCK_COUNT = 16; // Number of blocks in the buffer
 constexpr size_t BUFFER_SIZE = SD_BLOCK_SIZE * BUFFER_BLOCK_COUNT;
 
 // BUFFER_SIZE must always be a multiple of SD_BLOCK_SIZE to ensure proper block alignment
@@ -40,11 +40,13 @@ private:
         int write_header(); //Write file header with version and timestamp
         int flush(); // Flush any buffered data to the SD card
         
-        static constexpr uint16_t SENSOR_LOG_VERSION = 0x0002;
+        static constexpr uint16_t SENSOR_LOG_VERSION = 0x0003;
 
         struct __attribute__((packed)) FileHeader {
             uint16_t version;
             uint64_t timestamp;
+            uint64_t device_id;
+            uint8_t channel;    // AUDIO_CH_L (0) = left, AUDIO_CH_R (1) = right
         };
 
         struct sensor_data msg;

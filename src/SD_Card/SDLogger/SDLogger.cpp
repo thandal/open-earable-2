@@ -8,6 +8,7 @@
 #include "PowerManager.h"
 #include <errno.h>
 #include "audio_datapath.h"
+#include "channel_assignment.h"
 
 #include "StateIndicator.h"
 
@@ -110,9 +111,13 @@ void SDLogger::sensor_sd_task() {
             continue;
         }
 
+        // Reset signal early so signals raised during the drain loop
+        // are preserved for the next k_poll wakeup.
+        k_poll_signal_reset(&logger_sig);
+        logger_evt.state = K_POLL_STATE_NOT_READY;
+
         // If a close/flush is in progress, do not write concurrently.
         if (atomic_get(&g_stop_writing)) {
-            k_poll_signal_reset(&logger_sig);
             continue;
         }
 
@@ -122,7 +127,6 @@ void SDLogger::sensor_sd_task() {
             ring_buf_reset(&ring_buffer);
             k_mutex_unlock(&ring_mutex);
             sdlogger.is_open = false;
-            k_poll_signal_reset(&logger_sig);
             continue;
         }
 
@@ -132,24 +136,26 @@ void SDLogger::sensor_sd_task() {
             return;
         }
 
-        uint32_t fill = ring_buf_size_get(&ring_buffer);
+        // Drain all available full blocks from the ring buffer.
+        while (ring_buf_size_get(&ring_buffer) >= SD_BLOCK_SIZE) {
+            if (atomic_get(&g_stop_writing) || atomic_get(&g_sd_removed)) {
+                break;
+            }
 
-        if (fill >= SD_BLOCK_SIZE) {
+            uint32_t fill = ring_buf_size_get(&ring_buffer);
             if (fill > count_max_buffer_fill) {
                 count_max_buffer_fill = fill;
             }
 
             uint8_t *data = nullptr;
 
-            // Claim up to one SD block from the ring buffer under lock.
+            // Claim up to 4 SD blocks from the ring buffer under lock.
             k_mutex_lock(&ring_mutex, K_FOREVER);
-            uint32_t claimed = ring_buf_get_claim(&ring_buffer, &data, SD_BLOCK_SIZE);
+            uint32_t claimed = ring_buf_get_claim(&ring_buffer, &data, 4 * SD_BLOCK_SIZE);
             k_mutex_unlock(&ring_mutex);
 
             if (claimed == 0 || data == nullptr) {
-                // Nothing to write right now.
-                k_poll_signal_reset(&logger_sig);
-                continue;
+                break;
             }
 
             // Write the claimed bytes under file lock.
@@ -162,22 +168,14 @@ void SDLogger::sensor_sd_task() {
             if (written < 0) {
                 state_indicator.set_sd_state(SD_FAULT);
                 LOG_ERR("SD write failed: %d", written);
-
-                // Do not advance the ring buffer on error.
-                // Wakeups will continue; user can call end().
-                k_poll_signal_reset(&logger_sig);
-                continue;
+                break;
             }
 
             // Advance ring buffer by the number of bytes actually written.
             k_mutex_lock(&ring_mutex, K_FOREVER);
             ring_buf_get_finish(&ring_buffer, (uint32_t)written);
             k_mutex_unlock(&ring_mutex);
-        } else {
-            k_yield();
         }
-
-        k_poll_signal_reset(&logger_sig);
 
         STACK_USAGE_PRINT("sensor_msg_thread", &sdlogger.thread_data);
     }
@@ -290,6 +288,11 @@ int SDLogger::write_header() {
 
     header->version = SENSOR_LOG_VERSION;
     header->timestamp = micros();
+    header->device_id = oe_boot_state.device_id;
+
+    enum audio_channel ch;
+    channel_assignment_get(&ch);
+    header->channel = (uint8_t)ch;
 
     int ret;
     k_mutex_lock(&file_mutex, K_FOREVER);
@@ -320,8 +323,9 @@ int SDLogger::write_sensor_data(const void* const* data_blocks, const size_t* le
         return -ENODEV;
     }
 
-    // Do not block producers; if mutex is contended, drop quickly
-    if (k_mutex_lock(&ring_mutex, K_NO_WAIT) != 0) {
+    // Allow a short wait for mutex contention to clear.
+    // The writer holds ring_mutex only during fast ring_buf operations.
+    if (k_mutex_lock(&ring_mutex, K_USEC(200)) != 0) {
         return -EAGAIN;
     }
 
