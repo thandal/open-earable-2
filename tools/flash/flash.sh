@@ -74,18 +74,29 @@ if [ -n "$HW_VERSION" ]; then
     HW_VALUE=$(printf "0x%02X%02X%02X00" $HW_MAJOR $HW_MINOR $HW_PATCH)
 fi
 
+# Check if standalone was specified without left/right
+if [ "$STANDALONE" == true ] && [ -z "$LEFT" ] && [ -z "$RIGHT" ]; then
+    echo "Error: --standalone can only be used with --left or --right"
+    show_usage
+fi
+
+# Backup UICR if neither left nor right is specified
 if [ -z "$LEFT" ] && [ -z "$RIGHT" ]; then
     nrfjprog --readuicr ./tools/flash/uicr_backup.hex -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED
 fi
 
-nrfjprog --program ./build/merged_CPUNET.hex --chiperase --verify -f $CHIP --coprocessor CP_NETWORK --snr $SNR --clockspeed $CLOCKSPEED
+# Flash network core (CPUNET)
+nrfjprog --program ./build_fota/merged_CPUNET.hex --chiperase --verify -f $CHIP --coprocessor CP_NETWORK --snr $SNR --clockspeed $CLOCKSPEED
 
-nrfjprog --program ./build/merged.hex --chiperase --verify -f $CHIP --coprocessor CP_APPLICATION --snr $SNR --clockspeed $CLOCKSPEED
+# Flash application core (CPUAPP)
+nrfjprog --program ./build_fota/merged.hex --chiperase --verify -f $CHIP --coprocessor CP_APPLICATION --snr $SNR --clockspeed $CLOCKSPEED
 
+# Restore UICR if neither left nor right is specified
 if [ -z "$LEFT" ] && [ -z "$RIGHT" ]; then
     nrfjprog --program ./tools/flash/uicr_backup.hex -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED --verify
 fi
 
+# Set left/right configuration
 if [ "$LEFT" == true ]; then
     nrfjprog --memwr 0x00FF80F4 --val 0 -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED
 elif [ "$RIGHT" == true ]; then
@@ -104,4 +115,5 @@ if [ -n "$HW_VERSION" ]; then
     echo "Hardware version set to $HW_VERSION"
 fi
 
+# Reset device
 nrfjprog --reset -f $CHIP --snr $SNR --clockspeed $CLOCKSPEED

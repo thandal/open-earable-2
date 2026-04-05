@@ -55,13 +55,8 @@
      - Select the `open-earable-2` application.  
      - Click **"+ Add build configuration"** to set up a new build.
      - Select the SDK version 3.0.1, toolchain version 3.0.1, and `open-earable-2/nrf5340/cpuapp` as board target.
-     - To build **with FOTA** (firmware over-the-air update functionality):
-       - Leave the `Base configuration files (Kconfig fragments)` dropdown empty.
-       - as `Extra CMAKE arguments` set `-DFILE_SUFFIX="fota"`.
-       - as `Build directory` name set `build_fota`.
-     -  To build **without FOTA**:
-        - Select `prj.conf` as the `Base configuration files (Kconfig fragments)`.
-        - Do not set any of the FOTA flags described above.
+     - Leave the `Base configuration files (Kconfig fragments)` dropdown empty.
+     - The default build includes FOTA (firmware over-the-air update) support.
     
 9. **OPTIONAL: J-Link Setup**
    - Wire your J-Link to the debugging breakout PCB as shown below.
@@ -76,22 +71,14 @@
    - Make sure your device is charged or powered via USB. If the battery is fully discharged, the charging management IC will no longer supply power to the MCU from the battery, so you won’t be able to flash the MCU unless the battery is charged or the device is directly powered via USB.
 
    **[JLINK FLASHING]**
-   - Open a new terminal in VS Code and run the following command from the root of the `open-earable-v2` directory to flash the FOTA build. Make sure to set the serial number of your J-Link (right click your J-Link in the `CONNECTED DEVICES` tab of the nRF connect extension and copy the serial number).
+   - Open a new terminal in VS Code and run the following command from the root of the `open-earable-v2` directory to flash. Make sure to set the serial number of your J-Link (right click your J-Link in the `CONNECTED DEVICES` tab of the nRF connect extension and copy the serial number).
    ```bash
    # --right for the right ear device, or no flag to retain left/right bonding, --standalone for no pair   
    # --hw version is optional and can only be used with --left or --right
-   ./tools/flash/flash_fota.sh --snr 123456789 --left --hw 2.0.1    
-   ```
-
-   - or without FOTA
-   ```bash
-   # --right for the right ear device, or no flag to retain left/right bonding, --standalone for no pair
-   # --hw version is optional and can only be used with --left or --right
-
-   ./tools/flash/flash.sh --snr 123456789 --left    
+   ./tools/flash/flash.sh --snr 123456789 --left --hw 2.0.1    
    ```
      
-   - The FOTA update script is also available for Windows as `./tools/flash/flash_fota.ps1`. To execute it, open PowerShell with administrative privileges.
+   - The flash script is also available for Windows as `./tools/flash/flash.ps1`. To execute it, open PowerShell with administrative privileges.
 
    **[FOTA FLASHING via the Phone App]**
    - Charge to ~80% or more, unplug the earbud
@@ -104,7 +91,7 @@
    - (wait for the little red light *inside* the earbud to stop flashing)
 
    **[SERIAL FLASHING via USB]**
-   - Requires a **FOTA build** (MCUboot must be enabled). Install prerequisites:
+   - MCUboot is enabled by default. Install prerequisites:
    ```bash
    nrfutil install mcu-manager
    ```

@@ -34,8 +34,7 @@ Modules are decoupled via **Zephyr ZBUS** — a publish/subscribe message bus. K
 
 ## Configuration Files
 
-- **`prj.conf`** — Standard debug build (full logging, BLE, sensors, USB mass storage)
-- **`prj_fota.conf`** — Adds MCUboot for firmware-over-the-air updates
+- **`prj.conf`** — Default build with full logging, BLE, sensors, MCUboot FOTA support
 - **`prj_release.conf`** — Production build (no debug, minimal logging)
 - **`Kconfig` / `Kconfig.defaults`** — Kernel-style config system
 - **`*.overlay`** files — Device tree overlays per build variant
@@ -58,4 +57,4 @@ Built with `west build` (Zephyr's meta-tool). Flash scripts in `tools/flash/` su
 - **Battery:** TI BQ25120A (charger) + BQ27220 (fuel gauge)
 - **Interfaces:** I2S, I2C/TWI, SPI, USB, ADC, GPIO, PWM, UART
 - **Storage:** SD card (FAT/exFAT)
-- **Bootloader:** MCUboot (for FOTA builds)
+- **Bootloader:** MCUboot
