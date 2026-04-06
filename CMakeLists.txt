@@ -8,10 +8,6 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(openearable_v2_1)
 
-#set(OVERLAY_CONFIG 
-#    ${CMAKE_CURRENT_SOURCE_DIR}/unicast_server/overlay-unicast_server.conf
-#)
-
 string(TIMESTAMP NRF5340_AUDIO_CORE_APP_COMP_DATE "%a %b %d %H:%M:%S %Y")
 
 # Generate fw_info_app.c
@@ -21,17 +17,9 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/utils/fw_info_app.c.in"
 
 # Target sources below are specific to the nRF5340 Audio DK HW
 target_sources(app PRIVATE
-#    src/openearable_common.c
+    src/main.cpp
     ${CMAKE_BINARY_DIR}/fw_info_app.c
     )
-
-if (CONFIG_BT_BAP_BROADCAST_SINK)
-	add_subdirectory(broadcast_sink)
-endif()
-
-if (CONFIG_BT_BAP_UNICAST_SERVER)
-	add_subdirectory(unicast_server)
-endif()
 
 
 # Include application events and configuration headers

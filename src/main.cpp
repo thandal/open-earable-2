@@ -1,9 +1,3 @@
-/*
- * Copyright (c) 2018 Nordic Semiconductor ASA
- *
- * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
- */
-
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
@@ -41,9 +35,9 @@ extern "C" {
 #include "SensorScheme.h"
 #include "DefaultSensors.h"
 
-#include "../src/Battery/PowerManager.h"
-#include "../src/SensorManager/SensorManager.h"
-#include "../src/utils/StateIndicator.h"
+#include "Battery/PowerManager.h"
+#include "SensorManager/SensorManager.h"
+#include "utils/StateIndicator.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_MAIN_LOG_LEVEL);
 
