@@ -6,8 +6,8 @@ This is a **Zephyr RTOS** firmware project for the **nRF5340** dual-core SoC, bu
 
 | Path | Purpose |
 |------|---------|
-| `unicast_server/main.cpp` | **Application entry point** — initializes power, USB, audio, sensors, BLE services |
 | `src/` | Main source code (~700 files) |
+| `src/main.cpp` | **Application entry point** — initializes power, USB, audio, sensors, BLE services |
 | `boards/teco/openearable_v2/` | Board definitions, device trees, pin configs |
 | `dts/bindings/` | Custom device tree bindings (fuel gauge, codec, etc.) |
 | `include/` | Shared headers (notably `zbus_common.h` for the message bus) |
