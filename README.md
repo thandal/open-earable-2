@@ -24,6 +24,7 @@
 
 2. **[OPTIONAL: JLINK FLASHING] Install the J‑Link Software and Documentation Package**
    - Download and install from [https://www.segger.com/downloads/jlink/](https://www.segger.com/downloads/jlink/).
+   - NOTE: install the version of JLink that is compatible with nRF Connect SDK 3.0.1 -- currently JLink 9.24a.
      
 3. **Install nRF-Util**  
    - Download from [nRF Util – Nordic Semiconductor](https://www.nordicsemi.com/Products/Development-tools/nRF-Util).
