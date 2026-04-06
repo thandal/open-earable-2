@@ -139,6 +139,10 @@ void stop_sensor_manager() {
 
 	k_work_queue_drain(&sensor_work_q, true);
 
+	// Purge any remaining sensor messages so the publish thread
+	// doesn't keep feeding stale data to zbus/SDLogger.
+	k_msgq_purge(&sensor_queue);
+
 	//k_thread_suspend(sensor_pub_id);
 	k_poll_signal_reset(&sensor_manager_sig);
 
@@ -146,6 +150,8 @@ void stop_sensor_manager() {
 
 	// End SDLogger and close current log file
 	sdlogger.end();
+	sd_sensors.clear();
+	state_indicator.set_sd_state(SD_IDLE);
 
 	//k_msgq_purge(&config_queue);
 }
