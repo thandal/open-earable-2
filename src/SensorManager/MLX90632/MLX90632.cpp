@@ -100,7 +100,7 @@ bool MLX90632::begin(uint8_t deviceAddress, TWIM &i2c, status &returnError)
 
   uint16_t thisVersion;
   returnError = readRegister16(EE_VERSION, thisVersion);
-  LOG_WRN("Sensor EEPROM version (usually 0x205): 0x%X",thisVersion);
+  LOG_DBG("Sensor EEPROM version (usually 0x205): 0x%X",thisVersion);
 
   //Wait for eeprom_busy to clear
   uint16_t counter = 0;
@@ -232,7 +232,7 @@ float MLX90632::getObjectTemp(status& returnError)
   }
   else
   {
-    LOG_WRN("Found a cycle position that was not 1 or 2");
+    LOG_DBG("Found a cycle position that was not 1 or 2");
     readRegister16(RAM_4, (uint16_t&)lowerRAM);
     readRegister16(RAM_5, (uint16_t&)upperRAM);
   }
