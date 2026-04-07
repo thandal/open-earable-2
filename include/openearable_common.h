@@ -85,7 +85,6 @@ enum sensor_id {
 	ID_TEMP_BARO=1,
 	ID_MICRO=2,
 	ID_PPG=4,
-	ID_PULSOX=5,
 	ID_OPTTEMP=6,
 	ID_BONE_CONDUCTION=7,
 };
