@@ -10,6 +10,11 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/devicetree.h>
 
+#if defined(CONFIG_USB_DEVICE_STACK_NEXT) && defined(CONFIG_USBD_MSC_CLASS)
+#include <zephyr/usb/usbd.h>
+extern struct usbd_context *g_usbd;
+#endif
+
 #include "openearable_common.h"
 
 #include "SDLogger.h"
@@ -162,6 +167,18 @@ int SDCardManager::unmount() {
 		this->mounted = false;
 
 		release_ls();
+
+#if defined(CONFIG_USB_DEVICE_STACK_NEXT) && defined(CONFIG_USBD_MSC_CLASS)
+		/* Re-enable USB so the host can access the SD card via MSC */
+		if (g_usbd) {
+			ret = usbd_enable(g_usbd);
+			if (ret) {
+				LOG_ERR("Failed to re-enable USB: %d", ret);
+			} else {
+				LOG_INF("USB MSC re-enabled");
+			}
+		}
+#endif
 	}
 
 	return 0;
@@ -174,6 +191,19 @@ int SDCardManager::mount() {
 	uint64_t sd_card_size_bytes;
 	uint32_t sector_count;
 	size_t sector_size;
+
+#if defined(CONFIG_USB_DEVICE_STACK_NEXT) && defined(CONFIG_USBD_MSC_CLASS)
+	/* Disable USB so the host releases the SD card, giving firmware
+	 * exclusive access for filesystem operations. */
+	if (g_usbd) {
+		ret = usbd_disable(g_usbd);
+		if (ret) {
+			LOG_WRN("Failed to disable USB: %d", ret);
+		} else {
+			LOG_INF("USB MSC disabled for SD card access");
+		}
+	}
+#endif
 
 	ret = aquire_ls();
 

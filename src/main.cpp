@@ -44,6 +44,10 @@ LOG_MODULE_REGISTER(main, CONFIG_MAIN_LOG_LEVEL);
 #if defined(CONFIG_USB_DEVICE_STACK_NEXT)
 /* Register SD card as a USB Mass Storage LUN */
 USBD_DEFINE_MSC_LUN(sd, "SD", "OpenEarable", "SD Card", "1.00");
+
+/* Global USB device context, used by SDCardManager to disable/enable USB
+ * when the firmware needs exclusive SD card access for logging. */
+struct usbd_context *g_usbd;
 #endif
 
 int main(void) {
@@ -62,11 +66,11 @@ int main(void) {
 		/* Initialize SD card before USB so MSC can report media present */
 		disk_access_init("SD");
 
-		struct usbd_context *usbd = sample_usbd_init_device(NULL);
-		if (usbd == NULL) {
+		g_usbd = sample_usbd_init_device(NULL);
+		if (g_usbd == NULL) {
 			LOG_ERR("Failed to initialize USB device");
 		} else {
-			ret = usbd_enable(usbd);
+			ret = usbd_enable(g_usbd);
 			if (ret) {
 				LOG_ERR("Failed to enable USB: %d", ret);
 			}

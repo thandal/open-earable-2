@@ -459,6 +459,9 @@ int SDLogger::end() {
     atomic_clear(&g_stop_writing);
     atomic_clear(&g_sd_removed);
 
+    /* Unmount the SD card so USB MSC can re-enable for host access. */
+    sd_card->unmount();
+
     return 0;
 }
 
