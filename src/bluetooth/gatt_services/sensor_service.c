@@ -45,7 +45,7 @@ ZBUS_LISTENER_DEFINE(sensor_queue_listener, sensor_queue_listener_cb);
 
 static bool connection_complete = false;
 
-int notify_count = 0;
+static struct k_sem notify_sem;
 
 int MAX_NOTIFIES_IN_FLIGHT = 4;
 
@@ -196,12 +196,7 @@ BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_RECORDING_NAME,
 );
 
 static void notify_complete() {
-	notify_count--;
-
-	if (notify_count < 0) {
-		notify_count = 0;
-		LOG_WRN("Notify count went below zero!");
-	}
+	k_sem_give(&notify_sem);
 }
 
 static void notification_task(void) {
@@ -225,15 +220,12 @@ static void notification_task(void) {
 			params.func = notify_complete;
 			params.user_data = NULL;
 
-			while(notify_count >= MAX_NOTIFIES_IN_FLIGHT) {
-				k_yield(); // maybe replace with k_sleep?
-			}
-
-			notify_count++;
+			k_sem_take(&notify_sem, K_FOREVER);
 
 			ret = bt_gatt_notify_cb(NULL, &params);
 			if (ret != 0) {
 				LOG_WRN("Failed to send data: %d.\n", ret);
+				k_sem_give(&notify_sem);
 			}
 		}
 	}
@@ -329,6 +321,8 @@ int set_sensor_config_status(struct sensor_config config) {
 
 int init_sensor_service() {
 	int ret;
+
+	k_sem_init(&notify_sem, MAX_NOTIFIES_IN_FLIGHT, MAX_NOTIFIES_IN_FLIGHT);
 
 	thread_id_notify = k_thread_create(
 		&thread_data_notify, thread_stack_notify,
