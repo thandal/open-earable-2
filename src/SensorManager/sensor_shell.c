@@ -6,7 +6,7 @@
  * Usage:
  *   sensor start <sensor> <rate_idx> [sd|stream|all]
  *   sensor stop <sensor|all>
- *   sensor status
+ *   sensor info
  *   sensor stress <sd|stream|all> [duration_s]
  */
 
@@ -138,8 +138,8 @@ static int cmd_sensor_stop(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
-/* sensor status */
-static int cmd_sensor_status(const struct shell *sh, size_t argc, char **argv)
+/* sensor info */
+static int cmd_sensor_info(const struct shell *sh, size_t argc, char **argv)
 {
 	ARG_UNUSED(argc);
 	ARG_UNUSED(argv);
@@ -240,7 +240,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sensor_cmds,
 	SHELL_CMD_ARG(stop, NULL,
 		"Stop a sensor: sensor stop <imu|baro|micro|ppg|pulsox|temp|bone|all>",
 		cmd_sensor_stop, 2, 0),
-	SHELL_CMD(status, NULL, "Show available sensors and sample rates", cmd_sensor_status),
+	SHELL_CMD(info, NULL, "Show available sensors and sample rates", cmd_sensor_info),
 	SHELL_CMD_ARG(stress, NULL,
 		"Stress test: sensor stress <sd|stream|all> [duration_s]",
 		cmd_sensor_stress, 2, 1),
