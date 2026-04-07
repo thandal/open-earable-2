@@ -7,6 +7,7 @@
 #include <zephyr/sys/reboot.h>
 #include <zephyr/shell/shell.h>
 
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/pm/pm.h>
 #include <zephyr/pm/state.h>
 #include <zephyr/pm/device.h>
@@ -19,6 +20,7 @@
 #endif
 
 #include <hal/nrf_ficr.h>
+#include <hal/nrf_gpio.h>
 
 #include "../drivers/LED_Controller/KTD2026.h"
 #include "../drivers/ADAU1860.h"
@@ -352,9 +354,11 @@ int PowerManager::begin() {
 
         oe_state.charging_state = POWER_CONNECTED;
 
-        state_indicator.init(oe_state);
-
         k_work_schedule(&charge_ctrl_delayable, K_NO_WAIT);
+
+        if (!power_on) {
+            state_indicator.init(oe_state);
+        }
 
         while(!power_on && battery_controller.power_connected()) {
             //__WFE();
@@ -394,8 +398,7 @@ int PowerManager::begin() {
     }
 
     /* Keep the SPI level shifter (ls_1_8) and SD card (ls_sd) powered.
-     * ls_1_8 powers the SPI level shifter (U10) needed for SD card access.
-     * Without these, the MSC SYS_INIT's SD card init becomes invalid. */
+     * ls_1_8 powers the SPI level shifter (U10) needed for SD card access. */
     pm_device_runtime_get(ls_1_8);
     pm_device_runtime_get(ls_sd);
 
@@ -555,12 +558,15 @@ void bt_disconnect_handler(struct bt_conn *conn, void * data) {
 
 void PowerManager::reboot() {
     int ret;
-    
+
     // disconnect devices
     uint8_t data = BT_HCI_ERR_REMOTE_USER_TERM_CONN;
     bt_conn_foreach(BT_CONN_TYPE_ALL, bt_disconnect_handler, &data);
 
-    ret = bt_le_adv_stop();
+    ret = bt_mgmt_ext_adv_stop(0);
+    if (ret) {
+        LOG_WRN("Failed to stop ext adv: %d", ret);
+    }
 
     stop_sensor_manager();
 
@@ -579,7 +585,10 @@ int PowerManager::power_down(bool fault) {
     uint8_t data = BT_HCI_ERR_REMOTE_USER_TERM_CONN;
     bt_conn_foreach(BT_CONN_TYPE_ALL, bt_disconnect_handler, &data);
 
-    ret = bt_le_adv_stop();
+    ret = bt_mgmt_ext_adv_stop(0);
+    if (ret) {
+        LOG_WRN("Failed to stop ext adv: %d", ret);
+    }
 
     // power disonnected
     // prepare interrupts
@@ -760,9 +769,176 @@ static int cmd_battery_info(const struct shell *shell, size_t argc, const char *
     return 0;
 }
 
+static void i2c_manual_recover(uint32_t pin_scl, uint32_t pin_sda) {
+    // Configure SCL and SDA as standard push-pull
+    nrf_gpio_cfg_output(pin_scl);
+    nrf_gpio_pin_set(pin_scl);
+    nrf_gpio_cfg_output(pin_sda);
+    nrf_gpio_pin_set(pin_sda);
+    k_usleep(100);
+
+    // Generate 9 SCL clock pulses to clock out any stuck transmitting slave
+    for (int i = 0; i < 10; i++) {
+        nrf_gpio_pin_clear(pin_scl);
+        k_usleep(10);
+        nrf_gpio_pin_set(pin_scl);
+        k_usleep(10);
+    }
+
+    // Generate a STOP condition (SDA LOW to HIGH while SCL is HIGH)
+    nrf_gpio_pin_clear(pin_scl);
+    k_usleep(10);
+    nrf_gpio_pin_clear(pin_sda); // SDA LOW
+    k_usleep(10);
+    nrf_gpio_pin_set(pin_scl); // SCL HIGH
+    k_usleep(10);
+    nrf_gpio_pin_set(pin_sda); // SDA HIGH
+    k_usleep(10);
+
+    // Restore to Input (High-Impedance)
+    nrf_gpio_cfg_input(pin_scl, NRF_GPIO_PIN_NOPULL);
+    nrf_gpio_cfg_input(pin_sda, NRF_GPIO_PIN_NOPULL);
+}
+
+static int cmd_sensor_diag(const struct shell *shell, size_t argc, const char **argv) {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    shell_print(shell, "=== Sensor Bus Diagnostic ===");
+
+    // 1. Load switch GPIO states (actual pin levels)
+    shell_print(shell, "\n-- Load Switch GPIO States --");
+    shell_print(shell, "  ls_1_8 (P1.11): %d", nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(1, 11)));
+    shell_print(shell, "  ls_3_3 (P0.14): %d", nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(0, 14)));
+    shell_print(shell, "  ls_sd  (P1.12): %d", nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(1, 12)));
+    shell_print(shell, "  PPG LDO (P0.06): %d", nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(0, 6)));
+
+    // 2. I2C bus line levels (HIGH = idle/OK, LOW = stuck)
+    shell_print(shell, "\n-- I2C Bus Line Levels --");
+    shell_print(shell, "  I2C2: SCL(P1.00)=%d  SDA(P1.15)=%d",
+        nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(1, 0)),
+        nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(1, 15)));
+    shell_print(shell, "  I2C3: SCL(P1.02)=%d  SDA(P1.03)=%d",
+        nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(1, 2)),
+        nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(1, 3)));
+
+    // 3. BQ25120a PMIC registers
+    shell_print(shell, "\n-- BQ25120a PMIC --");
+    battery_controller.exit_high_impedance();
+
+    uint8_t charging_state = battery_controller.read_charging_state();
+    uint8_t fault = battery_controller.read_fault();
+    uint8_t ts_fault = battery_controller.read_ts_fault();
+    uint8_t ls_ldo_raw = battery_controller.read_ls_ldo_ctrl_raw();
+    float ldo_voltage = battery_controller.read_ldo_voltage();
+
+    shell_print(shell, "  Charging state reg: 0x%02x (state=%d)", charging_state, charging_state >> 6);
+    shell_print(shell, "  Fault reg: 0x%02x", fault);
+    if (fault & (1 << 4)) shell_print(shell, "    [4] Input over-voltage (cleared on read)");
+    if (fault & (1 << 5)) shell_print(shell, "    [5] Battery under-voltage (persistent)");
+    if (fault & (1 << 6)) shell_print(shell, "    [6] Input under-voltage (cleared on read)");
+    if (fault & (1 << 7)) shell_print(shell, "    [7] Battery over-voltage (persistent)");
+    shell_print(shell, "  TS fault reg: 0x%02x", ts_fault);
+    shell_print(shell, "  LS_LDO_CTRL raw: 0x%02x", ls_ldo_raw);
+    shell_print(shell, "    EN_LS_LDO (bit7): %d", (ls_ldo_raw >> 7) & 1);
+    shell_print(shell, "    LDO voltage: %.1f V", (double)ldo_voltage);
+    shell_print(shell, "  Power Good (PG): %d", battery_controller.power_connected());
+
+    battery_controller.enter_high_impedance();
+
+    // 4. I2C3 sensor probes
+    shell_print(shell, "\n-- I2C3 Sensor Probes --");
+    const struct device *i2c3_dev = DEVICE_DT_GET(DT_NODELABEL(i2c3));
+    struct { const char *name; uint8_t addr; } sensors[] = {
+        {"BMX160 (IMU)",  0x68},
+        {"BMP388 (Baro)", 0x76},
+        {"BMA580 (Bone)", 0x18},
+        {"MLX90632 (Temp)", 0x3A},
+    };
+    for (int i = 0; i < 4; i++) {
+        uint8_t dummy;
+        int ret = i2c_burst_read(i2c3_dev, sensors[i].addr, 0x00, &dummy, 1);
+        shell_print(shell, "  %s @0x%02x: %s (ret=%d)",
+            sensors[i].name, sensors[i].addr,
+            ret == 0 ? "OK" : "FAIL", ret);
+    }
+
+    // 5. I2C2 sensor probe
+    shell_print(shell, "\n-- I2C2 Sensor Probes --");
+    const struct device *i2c2_dev = DEVICE_DT_GET(DT_NODELABEL(i2c2));
+    {
+        uint8_t dummy;
+        int ret = i2c_burst_read(i2c2_dev, 0x62, 0x00, &dummy, 1);
+        shell_print(shell, "  MAXM86161 (PPG) @0x62: %s (ret=%d)",
+            ret == 0 ? "OK" : "FAIL", ret);
+    }
+
+    shell_print(shell, "\n=== Diagnostic Complete ===");
+    return 0;
+}
+
+static int cmd_sensor_bus_reset(const struct shell *shell, size_t argc, const char **argv) {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    // 1. Stop all sensors to halt ongoing I2C traffic
+    shell_print(shell, "Stopping all sensors...");
+    stop_sensor_manager();
+    k_msleep(100);
+
+    // 2. Suspend I2C peripherals before GPIO takeover
+    shell_print(shell, "Suspending I2C peripherals...");
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(i2c2), okay)
+    const struct device *i2c2_dev = DEVICE_DT_GET(DT_NODELABEL(i2c2));
+    pm_device_action_run(i2c2_dev, PM_DEVICE_ACTION_SUSPEND);
+#endif
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(i2c3), okay)
+    const struct device *i2c3_dev = DEVICE_DT_GET(DT_NODELABEL(i2c3));
+    pm_device_action_run(i2c3_dev, PM_DEVICE_ACTION_SUSPEND);
+#endif
+
+    // 3. Turn off ALL load switches via raw GPIO (bypass PM refcounts)
+    shell_print(shell, "Turning off all load switches...");
+    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 11));   // ls_1_8
+    nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 11));
+    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(0, 14));   // ls_3_3
+    nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(0, 14));
+    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 12));   // ls_sd
+    nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 12));
+
+    // 4. Force I2C lines LOW to break back-powering through pull-ups/ESD diodes
+    shell_print(shell, "Forcing I2C lines LOW to break back-power path...");
+    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 0));    // I2C2 SCL
+    nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 0));
+    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 15));   // I2C2 SDA
+    nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 15));
+    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 2));    // I2C3 SCL
+    nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 2));
+    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 3));    // I2C3 SDA
+    nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 3));
+
+    // 5. Hold everything off long enough for any latch-up to clear
+    shell_print(shell, "Holding all rails and I2C lines OFF for 5 seconds...");
+    k_msleep(5000);
+
+    // 6. I2C unstick sequence (9 clocks + STOP) on both buses
+    shell_print(shell, "Sending 9-clock I2C unstick on both buses...");
+    i2c_manual_recover(NRF_GPIO_PIN_MAP(1, 0), NRF_GPIO_PIN_MAP(1, 15));
+    i2c_manual_recover(NRF_GPIO_PIN_MAP(1, 2), NRF_GPIO_PIN_MAP(1, 3));
+
+    // 7. Keep GPIOs driven LOW (not floating) - reboot will re-init them properly
+    shell_print(shell, "Rebooting...");
+    k_msleep(20);
+    power_manager.reboot();
+
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(battery_cmd,
     SHELL_COND_CMD(CONFIG_SHELL, info, NULL, "Print battery info", cmd_battery_info),
     SHELL_COND_CMD(CONFIG_SHELL, setup, NULL, "Setup fuel gauge", cmd_setup_fuel_gauge),
+    SHELL_COND_CMD(CONFIG_SHELL, sensor_diag, NULL, "Diagnose sensor bus and power rail state", cmd_sensor_diag),
+    SHELL_COND_CMD(CONFIG_SHELL, sensor_bus_reset, NULL, "Hard reset I2C sensor bus via GPIO sink", cmd_sensor_bus_reset),
     SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(battery, &battery_cmd, "Power Manager Commands", NULL);

@@ -76,6 +76,7 @@ public:
     void disable_ts();
     uint8_t write_LDO_voltage_control(float volt);
     float read_ldo_voltage();
+    uint8_t read_ls_ldo_ctrl_raw();
     uint8_t write_LS_control(bool enable);
 
     button_state read_button_state();

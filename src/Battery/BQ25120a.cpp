@@ -262,6 +262,12 @@ float BQ25120a::read_ldo_voltage() {
         return voltage;
 }
 
+uint8_t BQ25120a::read_ls_ldo_ctrl_raw() {
+        uint8_t status = 0;
+        readReg(registers::LS_LDO_CTRL, &status, sizeof(status));
+        return status;
+}
+
 float BQ25120a::read_battery_voltage_control() {
         uint8_t status = 0;
         bool ret = readReg(registers::BAT_VOL_CTRL, (uint8_t *) &status, sizeof(status));
