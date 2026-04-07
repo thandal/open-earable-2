@@ -22,7 +22,6 @@ SENSOR_SID = {
     "barometer": 1,
     "microphone": 2,
     "ppg": 4,
-    "pulsox": 5,
     "optical_temp": 6,
     "bone_acc": 7,
 }
@@ -179,7 +178,7 @@ def print_report(filename, version, timestamp_us, device_id, channel,
 
     # List all sensors present and missing
     present = sorted(packets.keys())
-    all_sensors = ["imu", "barometer", "microphone", "ppg", "pulsox", "optical_temp", "bone_acc"]
+    all_sensors = ["imu", "barometer", "microphone", "ppg", "optical_temp", "bone_acc"]
     missing = [s for s in all_sensors if s not in present]
     print(f"\n  Sensors present: {', '.join(present) if present else 'none'}")
     if missing:
