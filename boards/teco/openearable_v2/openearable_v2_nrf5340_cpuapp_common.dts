@@ -146,13 +146,8 @@
         compatible = "i2c-device";
         reg = <0x62>;
     };
-
-	mlx90632: mlx90632@3A {
-        compatible = "i2c-device";
-        reg = <0x3A>;
-    };
  };
- 
+
  &i2c3 {
 	 compatible = "nordic,nrf-twim";
 	 status = "okay";
@@ -176,6 +171,11 @@
 	bmx160: bmx160@68 {
         compatible = "i2c-device";
         reg = <0x68>;
+    };
+
+	mlx90632: mlx90632@3A {
+        compatible = "i2c-device";
+        reg = <0x3A>;
     };
  };
  
