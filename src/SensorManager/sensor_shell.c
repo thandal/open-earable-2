@@ -29,7 +29,6 @@ static const struct sensor_name_map sensor_names[] = {
 	{ "baro",   ID_TEMP_BARO },
 	{ "micro",  ID_MICRO },
 	{ "ppg",    ID_PPG },
-	{ "pulsox", ID_PULSOX },
 	{ "temp",   ID_OPTTEMP },
 	{ "bone",   ID_BONE_CONDUCTION },
 };
