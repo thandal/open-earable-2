@@ -25,6 +25,7 @@ const SampleRateSetting<6> IMU::sample_rates = {
 };
 
 void IMU::update_sensor(struct k_work *work) {
+	if (!sensor._running) return;
 	int ret;
 
 	sBmx160SensorData_t magno_data;
@@ -102,6 +103,7 @@ void IMU::stop() {
 	_running = false;
 
 	k_timer_stop(&sensor.sensor_timer);
+	k_work_cancel(&sensor.sensor_work);
 
 	// turn off imu (?)
 	imu.softReset();

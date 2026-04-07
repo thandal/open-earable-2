@@ -49,6 +49,7 @@ bool Temp::init(struct k_msgq * queue) {
 }
 
 void Temp::update_sensor(struct k_work *work) {
+    if (!sensor._running) return;
     if (!temp.dataAvailable()) return;
 
     MLX90632::status returnError;
@@ -101,6 +102,7 @@ void Temp::stop() {
     _running = false;
 
 	k_timer_stop(&sensor.sensor_timer);
+	k_work_cancel(&sensor.sensor_work);
 
     temp.sleepMode();
 

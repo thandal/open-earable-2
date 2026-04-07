@@ -66,6 +66,7 @@ bool PPG::init(struct k_msgq * queue) {
 }
 
 void PPG::update_sensor(struct k_work *work) {
+    if (!sensor._running) return;
     int int_status;
     int status;
 
@@ -160,6 +161,7 @@ void PPG::stop() {
     _running = false;
 
 	k_timer_stop(&sensor.sensor_timer);
+	k_work_cancel(&sensor.sensor_work);
 
     ppg.stop();
 

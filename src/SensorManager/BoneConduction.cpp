@@ -48,6 +48,7 @@ void BoneConduction::reset() {
 }
 
 void BoneConduction::update_sensor(struct k_work *work) {
+    if (!sensor._running) return;
     uint64_t _time_stamp = micros();
 
     BoneConduction::sensor._sample_count += (_time_stamp - BoneConduction::sensor._last_time_stamp) / BoneConduction::sensor.t_sample_us;
@@ -133,6 +134,7 @@ void BoneConduction::stop() {
     _running = false;
 
 	k_timer_stop(&sensor.sensor_timer);
+	k_work_cancel(&sensor.sensor_work);
 
     bma580.stop();
 

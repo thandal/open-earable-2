@@ -35,6 +35,8 @@ const SampleRateSetting<18> Baro::sample_rates = {
 };
 
 void Baro::update_sensor(struct k_work *work) {
+	if (!sensor._running) return;
+
 	int ret;
 
 	bmp.performReading();
@@ -110,6 +112,7 @@ void Baro::stop() {
 	_running = false;
 
 	k_timer_stop(&sensor.sensor_timer);
+	k_work_cancel(&sensor.sensor_work);
 
     pm_device_runtime_put(ls_1_8);
 }
