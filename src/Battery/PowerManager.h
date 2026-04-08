@@ -29,6 +29,7 @@ public:
     void get_health_status(battery_health_status &status);
 
     void set_error_led(int val = 1);
+    void setup_pmic();
 
     static k_work_delayable power_down_work;
 private:

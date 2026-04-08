@@ -556,6 +556,10 @@ void bt_disconnect_handler(struct bt_conn *conn, void * data) {
     }
 }
 
+void PowerManager::setup_pmic() {
+    battery_controller.setup(_battery_settings);
+}
+
 void PowerManager::reboot() {
     int ret;
 
@@ -806,12 +810,12 @@ static int cmd_sensor_diag(const struct shell *shell, size_t argc, const char **
 
     shell_print(shell, "=== Sensor Bus Diagnostic ===");
 
-    // 1. Load switch GPIO states (actual pin levels)
+    // 1. Load switch GPIO states (output pins need nrf_gpio_pin_out_read)
     shell_print(shell, "\n-- Load Switch GPIO States --");
-    shell_print(shell, "  ls_1_8 (P1.11): %d", nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(1, 11)));
-    shell_print(shell, "  ls_3_3 (P0.14): %d", nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(0, 14)));
-    shell_print(shell, "  ls_sd  (P1.12): %d", nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(1, 12)));
-    shell_print(shell, "  PPG LDO (P0.06): %d", nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(0, 6)));
+    shell_print(shell, "  ls_1_8 (P1.11): %d", nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(1, 11)));
+    shell_print(shell, "  ls_3_3 (P0.14): %d", nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 14)));
+    shell_print(shell, "  ls_sd  (P1.12): %d", nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(1, 12)));
+    shell_print(shell, "  PPG LDO (P0.06): %d", nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 6)));
 
     // 2. I2C bus line levels (HIGH = idle/OK, LOW = stuck)
     shell_print(shell, "\n-- I2C Bus Line Levels --");
@@ -843,6 +847,14 @@ static int cmd_sensor_diag(const struct shell *shell, size_t argc, const char **
     shell_print(shell, "    EN_LS_LDO (bit7): %d", (ls_ldo_raw >> 7) & 1);
     shell_print(shell, "    LDO voltage: %.1f V", (double)ldo_voltage);
     shell_print(shell, "  Power Good (PG): %d", battery_controller.power_connected());
+
+    // 3b. If LDO voltage is wrong, try to fix it and report
+    if ((ls_ldo_raw >> 7) == 0) {
+        shell_print(shell, "\n  EN_LS_LDO is OFF — re-running PMIC setup...");
+        power_manager.setup_pmic();
+        uint8_t after = battery_controller.read_ls_ldo_ctrl_raw();
+        shell_print(shell, "  After setup: LS_LDO_CTRL=0x%02x (EN=%d)", after, (after >> 7) & 1);
+    }
 
     battery_controller.enter_high_impedance();
 
@@ -886,7 +898,15 @@ static int cmd_sensor_bus_reset(const struct shell *shell, size_t argc, const ch
     stop_sensor_manager();
     k_msleep(100);
 
-    // 2. Suspend I2C peripherals before GPIO takeover
+    // 2. Disable EN_LS_LDO in PMIC register BEFORE pulling GPIOs
+    //    With EN_LS_LDO=1 persisting in the PMIC, the 3.3V LDO may leak
+    //    even with LSCTRL low, preventing sensors from fully de-powering.
+    shell_print(shell, "Disabling EN_LS_LDO in PMIC...");
+    battery_controller.exit_high_impedance();
+    battery_controller.write_LS_control(false);
+    battery_controller.enter_high_impedance();
+
+    // 3. Suspend I2C peripherals before GPIO takeover
     shell_print(shell, "Suspending I2C peripherals...");
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(i2c2), okay)
     const struct device *i2c2_dev = DEVICE_DT_GET(DT_NODELABEL(i2c2));
@@ -897,16 +917,16 @@ static int cmd_sensor_bus_reset(const struct shell *shell, size_t argc, const ch
     pm_device_action_run(i2c3_dev, PM_DEVICE_ACTION_SUSPEND);
 #endif
 
-    // 3. Turn off ALL load switches via raw GPIO (bypass PM refcounts)
+    // 4. Turn off ALL load switches via raw GPIO (bypass PM refcounts)
     shell_print(shell, "Turning off all load switches...");
     nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 11));   // ls_1_8
     nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 11));
-    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(0, 14));   // ls_3_3
+    nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(0, 14));   // ls_3_3 / LSCTRL
     nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(0, 14));
     nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 12));   // ls_sd
     nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 12));
 
-    // 4. Force I2C lines LOW to break back-powering through pull-ups/ESD diodes
+    // 5. Force I2C lines LOW to break back-powering through pull-ups/ESD diodes
     shell_print(shell, "Forcing I2C lines LOW to break back-power path...");
     nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 0));    // I2C2 SCL
     nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 0));
@@ -917,19 +937,12 @@ static int cmd_sensor_bus_reset(const struct shell *shell, size_t argc, const ch
     nrf_gpio_cfg_output(NRF_GPIO_PIN_MAP(1, 3));    // I2C3 SDA
     nrf_gpio_pin_clear(NRF_GPIO_PIN_MAP(1, 3));
 
-    // 5. Hold everything off long enough for any latch-up to clear
-    shell_print(shell, "Holding all rails and I2C lines OFF for 5 seconds...");
-    k_msleep(5000);
-
-    // 6. I2C unstick sequence (9 clocks + STOP) on both buses
-    shell_print(shell, "Sending 9-clock I2C unstick on both buses...");
-    i2c_manual_recover(NRF_GPIO_PIN_MAP(1, 0), NRF_GPIO_PIN_MAP(1, 15));
-    i2c_manual_recover(NRF_GPIO_PIN_MAP(1, 2), NRF_GPIO_PIN_MAP(1, 3));
-
-    // 7. Keep GPIOs driven LOW (not floating) - reboot will re-init them properly
-    shell_print(shell, "Rebooting...");
+    // 6. Power off so EN_LS_LDO=0 persists and sensors stay de-powered.
+    //    Leave off as long as needed, then press button to restart.
+    //    setup() will re-enable the LDO on boot.
+    shell_print(shell, "Powering off. Press button to restart.");
     k_msleep(20);
-    power_manager.reboot();
+    sys_poweroff();
 
     return 0;
 }
