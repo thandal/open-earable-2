@@ -60,6 +60,11 @@ void BoneConduction::update_sensor(struct k_work *work) {
 
     int num_samples = sensor.bma580.read(sensor.fifo_acc_data);
 
+    if (num_samples < 0) {
+        LOG_WRN("BMA580 read failed: %d", num_samples);
+        return;
+    }
+
     if (num_samples > 0) {
         BoneConduction::sensor._sample_count = MAX(0, BoneConduction::sensor._num_samples_buffered - num_samples);
     }
@@ -116,7 +121,7 @@ void BoneConduction::start(int sample_rate_idx) {
 
     int word_size = 3 * sizeof(int16_t) + 1;
     _num_samples_buffered = MIN(MAX(1, (int) (CONFIG_SENSOR_LATENCY_MS * 1e3 / t_sample_us)), 512 / word_size - 8); // Buffer size is 512 bytes
-    
+
     bma580.init(sample_rates.reg_vals[sample_rate_idx], _num_samples_buffered * word_size);
     bma580.start();
 

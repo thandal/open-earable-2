@@ -39,7 +39,10 @@ void Baro::update_sensor(struct k_work *work) {
 
 	int ret;
 
-	bmp.performReading();
+	if (!bmp.performReading()) {
+		LOG_WRN("BMP388 read failed");
+		return;
+	}
 
 	if (baro_initial_discard > 0) {
 		baro_initial_discard--;
