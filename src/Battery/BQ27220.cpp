@@ -182,7 +182,7 @@ float BQ27220::state_of_health() {
 
 float BQ27220::current() {
         int16_t mA = 0;
-        bool ret = readReg(registers::NAC, (uint8_t *) &mA, sizeof(mA));
+        bool ret = readReg(registers::CURR, (uint8_t *) &mA, sizeof(mA));
         return mA;
 }
 
