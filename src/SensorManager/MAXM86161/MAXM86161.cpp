@@ -256,6 +256,12 @@ int MAXM86161::set_ppg_tint(int time)
 }
 
 /*******************************************************************************/
+// NOTE: alc_on/off and picket_on/off are currently unused and have a bug:
+// _set_one_bit/_clear_one_bit receive the register ADDRESS constant as the
+// first arg instead of existing_reg_values. This would overwrite the register
+// with the address value (e.g. 0x11), corrupting ADC range and integration
+// time settings. Fix the first arg before enabling these functions.
+#if 0
 int MAXM86161::alc_on(void)
 {
     int existing_reg_values;
@@ -265,11 +271,11 @@ int MAXM86161::alc_on(void)
     _read_from_reg(REG_PPG_CONFIG1, existing_reg_values);
 
     // Set the bit to stop the device
-    existing_reg_values = _clear_one_bit(REG_PPG_CONFIG1, POS_ALC_DIS); 
-    
+    existing_reg_values = _clear_one_bit(REG_PPG_CONFIG1, POS_ALC_DIS);
+
     // Send the Shutdown command to the device
     status = _write_to_reg(REG_PPG_CONFIG1, existing_reg_values);
- 
+
     return status;
 }
 
@@ -282,11 +288,11 @@ int MAXM86161::alc_off(void)
     _read_from_reg(REG_PPG_CONFIG1, existing_reg_values);
 
     // Set the bit to stop the device
-    existing_reg_values = _set_one_bit(REG_PPG_CONFIG1, POS_ALC_DIS); 
-    
+    existing_reg_values = _set_one_bit(REG_PPG_CONFIG1, POS_ALC_DIS);
+
     // Send the Shutdown command to the device
     status = _write_to_reg(REG_PPG_CONFIG1, existing_reg_values);
- 
+
     return status;
 }
 
@@ -300,11 +306,11 @@ int MAXM86161::picket_off(void)
     _read_from_reg(REG_PICKET_FENCE, existing_reg_values);
 
     // Set the bit to stop the device
-    existing_reg_values = _clear_one_bit(REG_PICKET_FENCE, POS_PICKET_DIS); 
-    
+    existing_reg_values = _clear_one_bit(REG_PICKET_FENCE, POS_PICKET_DIS);
+
     // Send the Shutdown command to the device
     status = _write_to_reg(REG_PICKET_FENCE, existing_reg_values);
- 
+
     return status;
 }
 
@@ -317,13 +323,14 @@ int MAXM86161::picket_on(void)
     _read_from_reg(REG_PICKET_FENCE, existing_reg_values);
 
     // Set the bit to stop the device
-    existing_reg_values = _set_one_bit(REG_PICKET_FENCE, POS_PICKET_DIS); 
-    
+    existing_reg_values = _set_one_bit(REG_PICKET_FENCE, POS_PICKET_DIS);
+
     // Send the Shutdown command to the device
     status = _write_to_reg(REG_PICKET_FENCE, existing_reg_values);
- 
+
     return status;
 }
+#endif
 
 int MAXM86161::new_value_read_on(void)
 {
