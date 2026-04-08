@@ -94,9 +94,11 @@ sleep 1
 
 # Flash network core (CPUNET)
 nrfutil device program --firmware ./build/merged_CPUNET.hex --core network --options chip_erase_mode=ERASE_ALL,verify=VERIFY_READ $NRFUTIL_OPTS
+nrfutil device reset --core network $NRFUTIL_OPTS
+sleep 1
 
 # Flash application core (CPUAPP)
-nrfutil device program --firmware ./build/merged.hex --core application --options chip_erase_mode=ERASE_ALL,verify=VERIFY_READ $NRFUTIL_OPTS
+nrfutil device program --firmware ./build/merged.hex --core application --options verify=VERIFY_READ $NRFUTIL_OPTS
 
 # Set left/right configuration
 if [ "$LEFT" == true ]; then
@@ -118,4 +120,4 @@ if [ -n "$HW_VERSION" ]; then
 fi
 
 # Reset device
-nrfutil device reset $NRFUTIL_OPTS
+nrfutil device reset --core application $NRFUTIL_OPTS
