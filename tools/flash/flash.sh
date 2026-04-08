@@ -4,14 +4,17 @@
 CLOCKSPEED=4000
 FAMILY=nrf53
 
+# Common nrfutil options
+NRFUTIL_OPTS="--family $FAMILY"
+
 # UICR address range for nRF5340
 UICR_ADDR=0x00FF8000
 UICR_SIZE=4096
 
 # Function to show usage
 show_usage() {
-    echo "Usage: $0 --snr <serial_number> [--left|--right] [--standalone] [--hw x.y.z]"
-    echo "  --snr: Device serial number (required)"
+    echo "Usage: $0 [--snr <serial_number>] [--left|--right] [--standalone] [--hw x.y.z]"
+    echo "  --snr: Device serial number"
     echo "  --left: Flash left earable configuration"
     echo "  --right: Flash right earable configuration"
     echo "  --standalone: Configure device for standalone mode"
@@ -33,16 +36,15 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 # Check if SNR is provided
-if [ -z "$SNR" ]; then
-    echo "Error: Serial number (--snr) is required"
-    show_usage
+if [ -n "$SNR" ]; then
+    # Validate serial number is numeric
+    if ! [[ "$SNR" =~ ^[0-9]+$ ]]; then
+        echo "Error: Serial number must be numeric"
+        exit 1
+    fi
+    NRFUTIL_OPTS="--serial-number $SNR $NRFUTIL_OPTS"
 fi
 
-# Validate serial number is numeric
-if ! [[ "$SNR" =~ ^[0-9]+$ ]]; then
-    echo "Error: Serial number must be numeric"
-    exit 1
-fi
 
 # Check if --hw is used without --left or --right
 if [ -n "$HW_VERSION" ] && [ -z "$LEFT" ] && [ -z "$RIGHT" ]; then
@@ -84,24 +86,17 @@ if [ "$STANDALONE" == true ] && [ -z "$LEFT" ] && [ -z "$RIGHT" ]; then
     show_usage
 fi
 
-# Common nrfutil options
-NRFUTIL_OPTS="--serial-number $SNR --family $FAMILY --swd-clock-frequency $CLOCKSPEED"
 
-# Backup UICR if neither left nor right is specified
-if [ -z "$LEFT" ] && [ -z "$RIGHT" ]; then
-    nrfutil device read --address $UICR_ADDR --bytes $UICR_SIZE --to-file ./tools/flash/uicr_backup.hex $NRFUTIL_OPTS
-fi
+# First, explicitly recover both cores separately to ensure they are unlocked
+nrfutil device recover --core network $NRFUTIL_OPTS
+nrfutil device recover --core application $NRFUTIL_OPTS
+sleep 1
 
 # Flash network core (CPUNET)
 nrfutil device program --firmware ./build/merged_CPUNET.hex --core network --options chip_erase_mode=ERASE_ALL,verify=VERIFY_READ $NRFUTIL_OPTS
 
 # Flash application core (CPUAPP)
 nrfutil device program --firmware ./build/merged.hex --core application --options chip_erase_mode=ERASE_ALL,verify=VERIFY_READ $NRFUTIL_OPTS
-
-# Restore UICR if neither left nor right is specified
-if [ -z "$LEFT" ] && [ -z "$RIGHT" ]; then
-    nrfutil device program --firmware ./tools/flash/uicr_backup.hex --options chip_erase_mode=ERASE_NONE,verify=VERIFY_READ $NRFUTIL_OPTS
-fi
 
 # Set left/right configuration
 if [ "$LEFT" == true ]; then
