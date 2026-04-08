@@ -69,11 +69,14 @@ void sensor_chan_update(void *p1, void *p2, void *p3) {
     int ret;
 
 	while (1) {
-		ret = k_poll(&sensor_manager_evt, 1, K_FOREVER);
+		// Block until a message is available. k_msgq_get with K_FOREVER
+		// sleeps the thread and wakes it when a producer enqueues.
+		ret = k_msgq_get(&sensor_queue, &msg, K_FOREVER);
+		if (ret) {
+			continue;
+		}
 
-		k_msgq_get(&sensor_queue, &msg, K_FOREVER);
-
-		ret = zbus_chan_pub(&sensor_chan, &msg, K_FOREVER); //K_NO_WAIT
+		ret = zbus_chan_pub(&sensor_chan, &msg, K_FOREVER);
 		if (ret) {
 			LOG_ERR("Failed to publish sensor msg, ret: %d", ret);
 		}
@@ -175,17 +178,9 @@ EdgeMlSensor * get_sensor(enum sensor_id id) {
 	}
 }
 
-// Worker-Funktion für die Sensor-Konfiguration
-static void config_work_handler(struct k_work *work) {
-	int ret;
-	struct sensor_config config;
-	
-	ret = k_msgq_get(&config_queue, &config, K_NO_WAIT);
-	if (ret != 0) {
-		LOG_INF("No config available");
-	}
-
-    float sampleRate = getSampleRateForSensorId(config.sensorId, config.sampleRateIndex);
+// Process a single sensor configuration entry.
+static void process_sensor_config(struct sensor_config &config) {
+	float sampleRate = getSampleRateForSensorId(config.sensorId, config.sampleRateIndex);
 	if (sampleRate <= 0) {
 		LOG_ERR("Invalid sample rate %f for sensor %i", sampleRate, config.sensorId);
 		return;
@@ -211,23 +206,13 @@ static void config_work_handler(struct k_work *work) {
 	sensor->sd_logging(config.storageOptions & DATA_STORAGE);
 	sensor->ble_stream(config.storageOptions & DATA_STREAMING);
 
-	if (config.storageOptions & (DATA_STORAGE | DATA_STREAMING)) {
-		if (sensor->init(&sensor_queue)) {
-			if (active_sensors == 0) start_sensor_manager();
-			sensor->start(config.sampleRateIndex);
-			if (sensor->is_running()) {
-				active_sensors++;
-			}
-		}
-	}
-
+	// Open SD logger before starting the sensor so no data is lost
 	if (config.storageOptions & DATA_STORAGE) {
 		sd_sensors.insert(config.sensorId);
 
 		if (!sdlogger.is_active()) {
 			const char *recording_name_prefix = get_sensor_recording_name();
 			LOG_INF("Starting SDLogger with recording name prefix: %s", recording_name_prefix);
-			// Start SDLogger with timestamp-based filename
 			std::string filename = recording_name_prefix + std::to_string(micros());
 			int ret = sdlogger.begin(filename);
 			if (ret == 0) state_indicator.set_sd_state(SD_RECORDING);
@@ -241,6 +226,16 @@ static void config_work_handler(struct k_work *work) {
 		}
 	}
 
+	if (config.storageOptions & (DATA_STORAGE | DATA_STREAMING)) {
+		if (sensor->init(&sensor_queue)) {
+			if (active_sensors == 0) start_sensor_manager();
+			sensor->start(config.sampleRateIndex);
+			if (sensor->is_running()) {
+				active_sensors++;
+			}
+		}
+	}
+
 	if (config.storageOptions & DATA_STREAMING) ble_sensors.insert(config.sensorId);
 	else if (ble_sensors.find(config.sensorId) != ble_sensors.end()) {
 		ble_sensors.erase(config.sensorId);
@@ -251,6 +246,16 @@ static void config_work_handler(struct k_work *work) {
 	set_sensor_config_status(config);
 
 	if (active_sensors == 0) stop_sensor_manager();
+}
+
+// Drains all queued configs so that rapid submissions (e.g. stress test)
+// are not lost when k_work_submit() is a no-op for already-pending work.
+static void config_work_handler(struct k_work *work) {
+	struct sensor_config config;
+
+	while (k_msgq_get(&config_queue, &config, K_NO_WAIT) == 0) {
+		process_sensor_config(config);
+	}
 }
 
 void config_sensor(struct sensor_config * config) {
