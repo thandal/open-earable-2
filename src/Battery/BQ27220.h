@@ -5,7 +5,6 @@
 #include <zephyr/drivers/gpio.h>
 
 #include <math.h>
-//#include <Wire.h>
 #include <TWIM.h>
 
 #include "openearable_common.h"
@@ -91,7 +90,7 @@ public:
         TEMP = 0x06,
         VOLT = 0x08,
         FLAGS = 0x0A,
-        CURR = 0x0C,        // Current() — instantaneous current, mA signed
+        CURR = 0x0C,         // Current() — instantaneous current, mA signed
         RM = 0x10,           // RemainingCapacity(), mAh
         FCC = 0x12,          // FullChargeCapacity(), mAh
         AI = 0x14,           // AverageCurrent(), mA signed
@@ -163,14 +162,11 @@ private:
 
     gpio_callback int_cb_data;
 
-    //const struct gpio_dt_spec gpout_pin = GPIO_DT_SPEC_GET(DT_NODELABEL(bq27220), gpout_gpios);
     const struct gpio_dt_spec gpout_pin = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(bq27220), gpout_gpios, {0});
 
     TWIM *_i2c;
 };
 
 extern BQ27220 fuel_gauge;
-
-//extern BQ27220 battery_gauge;
 
 #endif
