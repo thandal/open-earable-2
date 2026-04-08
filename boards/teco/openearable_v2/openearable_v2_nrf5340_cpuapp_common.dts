@@ -36,7 +36,6 @@
 		 enable-gpios = <&gpio1 12 GPIO_ACTIVE_HIGH>;
 		 power-delay-us = <300>; // 250us per datasheet
 		 status = "okay";
-		 default-on;
 	 };
  
 	 gpio_fwd: nrf-gpio-forwarder {
@@ -122,6 +121,7 @@
 			enable-gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;
 			power-delay-us = <600>; // 250us per datasheet
 			status = "okay";
+			default-on;
         };
 	 };
 
@@ -147,7 +147,7 @@
     };
 
 	 adau1860: adau1860@64 {
-		 compatible = "analog,adau1860";
+		 compatible = "adi,adau1860";
 		 reg = <0x64>;
 		 enable-gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
 	 };
