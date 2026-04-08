@@ -1,26 +1,12 @@
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
-#include <zephyr/pm/device.h>  // ✅ Correct Power Management API
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(board_init, LOG_LEVEL_DBG);
 
-//#include "nrf5340_audio_common.h"
-
 #include <zephyr/drivers/gpio.h>
 
-#include <zephyr/pm/device.h>
-#include <zephyr/pm/device_runtime.h>
-
-#define load_switch_sd_id DT_NODELABEL(load_switch_sd)
-#define load_switch_1_8_id DT_NODELABEL(load_switch)
-#define load_switch_3_3_id DT_CHILD(DT_NODELABEL(bq25120a), load_switch)
-//#define load_switch_3_3_id DT_NODELABEL(lsctrl)
-
-const struct device *const cons = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
-const struct device *const ls_1_8 = DEVICE_DT_GET(load_switch_1_8_id);
-const struct device *const ls_3_3 = DEVICE_DT_GET(load_switch_3_3_id);
-const struct device *const ls_sd = DEVICE_DT_GET(load_switch_sd_id);
+#include "openearable_common.h"
 
 struct load_switch_data {
     struct gpio_dt_spec ctrl_pin;
