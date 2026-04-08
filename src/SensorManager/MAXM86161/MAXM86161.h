@@ -198,7 +198,7 @@ private:
 #define REG_S1_HI_RES_DAC1	0x2C
 #define REG_S2_HI_RES_DAC1	0x2D
 #define REG_S3_HI_RES_DAC1	0x2E
-#define REG_S4_HI_RES_DAC1	0x2D
+#define REG_S4_HI_RES_DAC1	0x2F  // per MAXM86161 datasheet Table 2
 #define REG_S5_HI_RES_DAC1	0x30
 #define REG_S6_HI_RES_DAC1	0x31
 
