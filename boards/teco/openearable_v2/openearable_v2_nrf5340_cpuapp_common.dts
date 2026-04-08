@@ -124,6 +124,11 @@
 			status = "okay";
         };
 	 };
+
+	 ktd2026: ktd2026@30 {
+		 compatible = "i2c-device";
+		 reg = <0x30>;
+	 };
  };
  
  &i2c2 {
