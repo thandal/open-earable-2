@@ -85,13 +85,13 @@ static int cmd_sensor_start(const struct shell *sh, size_t argc, char **argv)
 
 	if (argc < 3) {
 		shell_error(sh, "Usage: sensor start <sensor> <rate_idx> [sd|stream|all]");
-		shell_print(sh, "Sensors: imu, baro, micro, ppg, pulsox, temp, bone");
+		shell_print(sh, "Sensors: imu, baro, micro, ppg, temp, bone");
 		return -EINVAL;
 	}
 
 	if (lookup_sensor(argv[1], &id) != 0) {
 		shell_error(sh, "Unknown sensor '%s'", argv[1]);
-		shell_print(sh, "Valid: imu, baro, micro, ppg, pulsox, temp, bone");
+		shell_print(sh, "Valid: imu, baro, micro, ppg, temp, bone");
 		return -EINVAL;
 	}
 
@@ -235,10 +235,10 @@ static int cmd_sensor_stress(const struct shell *sh, size_t argc, char **argv)
 
 SHELL_STATIC_SUBCMD_SET_CREATE(sensor_cmds,
 	SHELL_CMD_ARG(start, NULL,
-		"Start a sensor: sensor start <imu|baro|micro|ppg|pulsox|temp|bone> <rate_idx> [sd|stream|all]",
+		"Start a sensor: sensor start <imu|baro|micro|ppg|temp|bone> <rate_idx> [sd|stream|all]",
 		cmd_sensor_start, 3, 1),
 	SHELL_CMD_ARG(stop, NULL,
-		"Stop a sensor: sensor stop <imu|baro|micro|ppg|pulsox|temp|bone|all>",
+		"Stop a sensor: sensor stop <imu|baro|micro|ppg|temp|bone|all>",
 		cmd_sensor_stop, 2, 0),
 	SHELL_CMD(info, NULL, "Show available sensors and sample rates", cmd_sensor_info),
 	SHELL_CMD_ARG(stress, NULL,
