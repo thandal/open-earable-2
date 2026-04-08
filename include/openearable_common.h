@@ -137,11 +137,4 @@ struct sd_msg {
 	bool removed;
 };
 
-#include "audio_i2s.h"
-
-struct audio_rx_data {
-    char data[FRAME_SIZE_BYTES];
-    size_t size;
-};
-
 #endif
