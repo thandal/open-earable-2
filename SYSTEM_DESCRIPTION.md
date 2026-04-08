@@ -52,9 +52,25 @@ Built with `west build` (Zephyr's meta-tool). Flash scripts in `tools/flash/` su
 ## Hardware
 
 - **SoC:** nRF5340 dual-core ARM Cortex-M33 (Application + Network cores)
-- **Audio Codec:** Cirrus Logic ADAU1860
+- **Audio Codec:** Analog Devices ADAU1860
 - **Sensors:** BMA580, BMX160, BMP388, MAXM86161, MLX90632
 - **Battery:** TI BQ25120A (charger) + BQ27220 (fuel gauge)
+- **LED Controller:** KTD2026 (3-channel RGB)
 - **Interfaces:** I2S, I2C/TWI, SPI, USB, ADC, GPIO, PWM, UART
 - **Storage:** SD card (FAT/exFAT)
 - **Bootloader:** MCUboot
+
+## I2C Bus Topology
+
+| Bus | Speed | Devices |
+|-----|-------|---------|
+| I2C1 | 400 kHz | BQ27220 (0x55), BQ25120A (0x6A), KTD2026 (0x30) |
+| I2C2 | 400 kHz | MAXM86161 (0x62), ADAU1860 (0x64) |
+| I2C3 | 1 MHz (FM+) | BMA580 (0x18), BMX160 (0x68), BMP388 (0x76), MLX90632 (0x3A) |
+
+## Optimization Opportunities (from datasheet review)
+
+- **BMP388:** Running with no oversampling and no IIR filter. The datasheet recommends at least x4 pressure oversampling + IIR coeff 3 for indoor navigation (5 cm altitude noise vs 55 cm with current defaults). See BMP388 datasheet Table "Recommended Filter Settings."
+- **BMX160:** Has a 1024-byte hardware FIFO that is not utilized. At higher ODRs, the current polling approach risks data loss. Enabling header-mode FIFO with watermark interrupt would reduce I2C transactions and CPU wakeups.
+- **MLX90632:** Calibration constants are global `double` variables (104 bytes). These should be `float` class members — the Cortex-M33 FPU is single-precision only, so `double` math is emulated in software.
+- **KTD2026:** Only I2C device with a hardcoded address (0x30 in code) instead of using the device tree. No DTS node defined.
