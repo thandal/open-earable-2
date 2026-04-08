@@ -178,9 +178,9 @@
         reg = <0x68>;
     };
 
-	mlx90632: mlx90632@3A {
+	mlx90632: mlx90632@3a {
         compatible = "i2c-device";
-        reg = <0x3A>;
+        reg = <0x3a>;
     };
  };
  
