@@ -73,4 +73,3 @@ Built with `west build` (Zephyr's meta-tool). Flash scripts in `tools/flash/` su
 - **BMP388:** Running with no oversampling and no IIR filter. The datasheet recommends at least x4 pressure oversampling + IIR coeff 3 for indoor navigation (5 cm altitude noise vs 55 cm with current defaults). See BMP388 datasheet Table "Recommended Filter Settings."
 - **BMX160:** Has a 1024-byte hardware FIFO that is not utilized. At higher ODRs, the current polling approach risks data loss. Enabling header-mode FIFO with watermark interrupt would reduce I2C transactions and CPU wakeups.
 - **MLX90632:** Calibration constants are global `double` variables (104 bytes). These should be `float` class members — the Cortex-M33 FPU is single-precision only, so `double` math is emulated in software.
-- **KTD2026:** Only I2C device with a hardcoded address (0x30 in code) instead of using the device tree. No DTS node defined.
