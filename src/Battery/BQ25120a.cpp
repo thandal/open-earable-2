@@ -241,14 +241,36 @@ uint8_t BQ25120a::write_LDO_voltage_control(float volt) {
 
         volt = CLAMP(volt, 0.8f, 3.3f);
 
+        exit_high_impedance();
+
+        // Per datasheet: "The LS/LDO output can only be changed when the
+        // EN_LS_LDO and LSCTRL pin has disabled the output."
+        // Must disable BOTH before changing voltage bits.
+
+        // 1. Disable EN_LS_LDO
+        status = 0;
         readReg(registers::LS_LDO_CTRL, &status, sizeof(status));
-
-        //status |= (((uint16_t)((volt - 0.8) * 10)) & 0x1F) << 2;
-        status &= 1 << 7;
-        status |= ((uint8_t)((volt - 0.8f) * 10 + EPS)) << 2;
-        //status |= 1 << 7;
-
+        status &= ~(1 << 7);
         writeReg(registers::LS_LDO_CTRL, &status, sizeof(status));
+
+        // 2. Pull LSCTRL low
+        gpio_pin_set_dt(&cd_pin, 1); // ensure not in high-Z for the next GPIO
+        const struct gpio_dt_spec lsctrl = {
+                .port = DEVICE_DT_GET(DT_NODELABEL(gpio0)),
+                .pin = 14,
+                .dt_flags = GPIO_ACTIVE_HIGH
+        };
+        gpio_pin_set_dt(&lsctrl, 0);
+        k_usleep(100);
+
+        // 3. Now write voltage + EN_LS_LDO
+        status = ((uint8_t)((volt - 0.8f) * 10 + EPS)) << 2;
+        status |= 1 << 7;
+        writeReg(registers::LS_LDO_CTRL, &status, sizeof(status));
+
+        // 4. Re-enable LSCTRL
+        gpio_pin_set_dt(&lsctrl, 1);
+        k_usleep(600); // power-delay-us from DTS
 
         return status;
 }
