@@ -139,14 +139,13 @@ void PPG::start(int sample_rate_idx) {
 
     t_sample_us = 1e6 / sample_rates.true_sample_rates[sample_rate_idx];
 
-    k_timeout_t t = K_USEC(t_sample_us);
-
     _num_samples_buffered = MIN(MAX(1, (int) (CONFIG_SENSOR_LATENCY_MS * 1e3 / t_sample_us)), FIFO_SIZE / LED_NUM - 2);
-    
+
     ppg.set_interrogation_rate(sample_rates.reg_vals[sample_rate_idx]);
     ppg.set_watermark(FIFO_SIZE - _num_samples_buffered * LED_NUM);
     ppg.start();
 
+    k_timeout_t t = K_USEC(t_sample_us * _num_samples_buffered);
     k_timer_start(&sensor.sensor_timer, K_NO_WAIT, t);
 
     _running = true;
