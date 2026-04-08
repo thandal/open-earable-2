@@ -65,8 +65,8 @@ Built with `west build` (Zephyr's meta-tool). Flash scripts in `tools/flash/` su
 | Bus | Address | Role | Speed | Devices |
 |-----|---------|------|-------|---------|
 | I2C1 | i2c@9000 | Power | 400 kHz | KTD2026 (0x30), BQ27220 (0x55), BQ25120A (0x6A) |
-| I2C2 | i2c@b000 | Audio | 400 kHz | MAXM86161 (0x62), ADAU1860 (0x64) |
-| I2C3 | i2c@c000 | Sensors | 1 MHz (FM+) | BMA580 (0x18), BMX160 (0x68), BMP388 (0x76), MLX90632 (0x3A) |
+| I2C2 | i2c@b000 | Audio | 400 kHz | Pulse Oximeter/PPG MAXM86161 (0x62), ADAU1860 (0x64) |
+| I2C3 | i2c@c000 | Sensors | 1 MHz (FM+) | Bone Conductor BMA580 (0x18), IMU BMX160 (0x68), Barometer BMP388 (0x76), Optical Temp MLX90632 (0x3A) |
 
 ## Optimization Opportunities (from datasheet review)
 
