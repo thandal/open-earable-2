@@ -143,6 +143,32 @@
 ## Mounting the SD Card over USB-C
 Connect the device to USB-C, and then press the reset button to power-cycle the device. When it comes up, it should mount!
 
+Note: The SD card is automatically unmounted from USB when the firmware starts logging (e.g. `sensor stress sd`), and re-mounted when logging stops.
+
+## RTT Shell
+To access the Zephyr shell over RTT (e.g. for running `sensor` commands), use J-Link with netcat:
+
+**Terminal 1** — start J-Link:
+```bash
+JLinkExe -device nrf5340_xxaa_app -if swd -speed 4000 -autoconnect 1
+```
+
+**Terminal 2** — connect to RTT:
+```bash
+JLinkRTTClient -LocalEcho Off
+```
+
+Note: You must stop `JLinkExe` (Ctrl-C) before flashing!
+
+
+## Error LED (Internal Red LED)
+There is a separate red LED connected to the `#ERROR` pin (GPIO1:8) on the MDBT board, distinct from the main RGB status LED. It is defined as `led_error` in the devicetree.
+
+| LED State         | Description                                                                 |
+|------------------|-----------------------------------------------------------------------------|
+| Blinking          | MCUboot firmware upgrade in progress                                        |
+| Solid on          | MCUboot found no bootable image, or the app hit a fatal error               |
+| Off               | Normal operation (valid image booted successfully)                          |
 
 ## Battery States
 Battery states will overwrite LED connection states. All LED states can be manually overwritten via BLE service.
