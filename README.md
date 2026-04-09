@@ -18,6 +18,8 @@
 5. [Citing](#citing)
 
 
+**NOTE** - The OpenEarable 2.0 has a known issue where the flex cable to the sensors can come loose, causing the sensors to stop working. If this happens, you can try to fix it by reseating the flex cable.
+
 ## Setup
 1. **Install Visual Studio Code (VS Code)**  
    - Download and install from [https://code.visualstudio.com](https://code.visualstudio.com).
@@ -229,9 +231,3 @@ If you are using OpenEarable, please cite is as follows:
      publisher={ACM New York, NY, USA}
 }
 ```
-
-
-
-
-
-
