@@ -2,7 +2,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 
-//#include "bootutil/bootutil.h"
 #include "bootutil/boot_hooks.h"
 #include "bootutil/mcuboot_status.h"
 
@@ -22,20 +21,21 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 {
     static bool led_initialized = false;
 
-    // Initialisiere LED beim ersten Aufruf
+    // Initialize LED on first call
     if (!led_initialized) {
         if (device_is_ready(led.port)) {
             gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
             led_initialized = true;
         }
+        k_timer_init(&blink_timer, blink_timer_handler, NULL);
     }
 
     switch (status) {
         case MCUBOOT_STATUS_STARTUP:
             //state_indicator.set_state(STARTUP);
+            k_timer_start(&blink_timer, K_MSEC(50), K_MSEC(50));
             break;
         case MCUBOOT_STATUS_UPGRADING:
-            k_timer_init(&blink_timer, blink_timer_handler, NULL);
             k_timer_start(&blink_timer, K_MSEC(250), K_MSEC(250));
             break;
         case MCUBOOT_STATUS_BOOTABLE_IMAGE_FOUND:
@@ -47,6 +47,8 @@ void mcuboot_status_change(mcuboot_status_type_t status)
             gpio_pin_set_dt(&led, 1);
             break;
         case MCUBOOT_STATUS_BOOT_FAILED:
+            k_timer_stop(&blink_timer);
+            gpio_pin_set_dt(&led, 1);
             //state_indicator.set_state(BOOT_FAILED);
             break;
         case MCUBOOT_STATUS_USB_DFU_WAITING:
@@ -67,18 +69,21 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 int init_load_switch()
 {
     int ret;
+
+    // V_LS 1.8v is required for flash.
     static const struct gpio_dt_spec load_switch_pin = {
         .port = DEVICE_DT_GET(DT_NODELABEL(gpio1)),
         .pin = 11,
         .dt_flags = GPIO_ACTIVE_HIGH
     };
 
+    // LS 3.3v is required for the Error LED.
     static const struct gpio_dt_spec ls_3_3_pin = {
         .port = DEVICE_DT_GET(DT_NODELABEL(gpio0)),
         .pin = 14,
         .dt_flags = GPIO_ACTIVE_HIGH
     };
-
+    
     ret = device_is_ready(load_switch_pin.port);
     if (!ret) {
         printk("Pins not ready.\n");
@@ -87,13 +92,19 @@ int init_load_switch()
 
     ret = gpio_pin_configure_dt(&load_switch_pin, GPIO_OUTPUT_ACTIVE);
     if (ret != 0) {
-        printk("Failed to setup Load Switch.\n");
+        printk("Failed to setup 1.8V load switch.\n");
         return ret;
+    }
+
+    ret = device_is_ready(ls_3_3_pin.port);
+    if (!ret) {
+        printk("Pins not ready.\n");
+        return -1;
     }
 
     ret = gpio_pin_configure_dt(&ls_3_3_pin, GPIO_OUTPUT_ACTIVE);
     if (ret != 0) {
-        printk("Failed to setup 3.3V.\n");
+        printk("Failed to setup 3.3V load switch.\n");
         return ret;
     }
 
@@ -101,12 +112,3 @@ int init_load_switch()
 }
 
 SYS_INIT(init_load_switch, PRE_KERNEL_2, 80);
-
-/*
-int wait() {
-    k_msleep(1);
-
-    return 0;
-}
-
-SYS_INIT(wait, POST_KERNEL, 80);*/
