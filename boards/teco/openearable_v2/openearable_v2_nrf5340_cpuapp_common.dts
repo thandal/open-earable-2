@@ -36,6 +36,7 @@
 		 enable-gpios = <&gpio1 12 GPIO_ACTIVE_HIGH>;
 		 power-delay-us = <300>; // 250us per datasheet
 		 status = "okay";
+		 default-on;
 	 };
  
 	 gpio_fwd: nrf-gpio-forwarder {
@@ -121,7 +122,6 @@
 			enable-gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;
 			power-delay-us = <600>; // 250us per datasheet
 			status = "okay";
-			default-on;
         };
 	 };
 

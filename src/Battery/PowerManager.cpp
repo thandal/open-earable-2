@@ -37,14 +37,9 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(power_manager, LOG_LEVEL_DBG);
 
-//K_TIMER_DEFINE(PowerManager::charge_timer, PowerManager::charge_timer_handler, NULL);
-
 K_WORK_DELAYABLE_DEFINE(PowerManager::charge_ctrl_delayable, PowerManager::charge_ctrl_work_handler);
-
 K_WORK_DELAYABLE_DEFINE(PowerManager::power_down_work, PowerManager::power_down_work_handler);
 
-//K_WORK_DEFINE(PowerManager::power_down_work, PowerManager::power_down_work_handler);
-//K_WORK_DEFINE(PowerManager::charge_ctrl_work, PowerManager::charge_ctrl_work_handler);
 K_WORK_DEFINE(PowerManager::fuel_gauge_work, PowerManager::fuel_gauge_work_handler);
 K_WORK_DEFINE(PowerManager::battery_controller_work, PowerManager::battery_controller_work_handler);
 
@@ -52,8 +47,6 @@ ZBUS_CHAN_DEFINE(battery_chan, struct battery_data, NULL, NULL, ZBUS_OBSERVERS_E
     ZBUS_MSG_INIT(0));
 
 static struct battery_data msg;
-
-//LoadSwitch PowerManager::v1_8_switch(GPIO_DT_SPEC_GET(DT_NODELABEL(load_switch), gpios));
 
 void PowerManager::fuel_gauge_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
     LOG_DBG("Fuel Gauge GPOUT Interrupt");
@@ -100,11 +93,8 @@ void PowerManager::battery_controller_work_handler(struct k_work * work) {
 
     if (state.wake_2) {
         power_manager.power_on = !power_manager.power_on;
-        //LOG_INF("Power on: %i", power_manager.power_on);
-
         if (!power_manager.power_on) power_manager.power_down();
     }
-
 }
 
 void PowerManager::fuel_gauge_work_handler(struct k_work * work) {
@@ -117,8 +107,6 @@ void PowerManager::fuel_gauge_work_handler(struct k_work * work) {
 
     power_manager.get_battery_status(status);
 
-    // full discharge
-    //if (bat.FD) k_work_reschedule(&power_manager.power_down_work, K_NO_WAIT);
     if (power_manager.power_on && bat.SYSDWN) {
         LOG_WRN("Battery reached system down voltage.");
         k_work_reschedule(&power_manager.power_down_work, K_NO_WAIT);
@@ -336,6 +324,8 @@ int PowerManager::begin() {
     if (charging) {
         power_manager.last_charging_state = 0;
 
+        /* Enable PM runtime for load switches needed during charging.
+         * ls_3_3 is claimed on demand by state_indicator. */
         int ret = pm_device_runtime_enable(ls_1_8);
         if (ret != 0) {
             LOG_WRN("Error setting up load switch 1.8V.");
@@ -348,9 +338,14 @@ int PowerManager::begin() {
         if (ret != 0) {
             LOG_WRN("Error setting up load switch 3.3V.");
         }
+        pm_device_runtime_get(ls_3_3);
 
-        //battery_level_status bat_status;
-        //get_battery_status(&bat_status);
+        ret = pm_device_runtime_enable(ls_sd);
+        if (ret != 0) {
+            LOG_WRN("Error setting up load switch SD.");
+        }
+        pm_device_runtime_get(ls_sd);
+
 
         oe_state.charging_state = POWER_CONNECTED;
 
@@ -377,30 +372,28 @@ int PowerManager::begin() {
     fuel_gauge.set_int_callback(fuel_gauge_callback);
     //battery_controller.set_int_callback(battery_controller_callback);
 
-    //float voltage = battery_controller.read_ldo_voltage();
-    //if (voltage != 3.3) battery_controller.write_LDO_voltage_control(3.3);
-
     battery_controller.enter_high_impedance();
 
+    /* Enable PM runtime for all load switches. With pm_device_init_suspended()
+     * in board_init, _enable is a no-op (no glitch). */
     int ret = pm_device_runtime_enable(ls_1_8);
     if (ret != 0) {
         LOG_WRN("Error setting up load switch 1.8V.");
     }
+    pm_device_runtime_get(ls_1_8);
 
     ret = pm_device_runtime_enable(ls_3_3);
     if (ret != 0) {
         LOG_WRN("Error setting up load switch 3.3V.");
     }
+    pm_device_runtime_get(ls_3_3);
 
     ret = pm_device_runtime_enable(ls_sd);
     if (ret != 0) {
         LOG_WRN("Error setting up load switch SD.");
     }
-
-    /* Keep the SPI level shifter (ls_1_8) and SD card (ls_sd) powered.
-     * ls_1_8 powers the SPI level shifter (U10) needed for SD card access. */
-    pm_device_runtime_get(ls_1_8);
     pm_device_runtime_get(ls_sd);
+
 
     ret = device_is_ready(error_led.port); //bool
     if (!ret) {
@@ -442,7 +435,7 @@ int PowerManager::begin() {
 
     uint32_t device_id[2];
 
-    // Lesen der DEVICEID
+    // Read the device ID
     device_id[0] = nrf_ficr_deviceid_get(NRF_FICR, 0);
     device_id[1] = nrf_ficr_deviceid_get(NRF_FICR, 1);
 
@@ -639,9 +632,9 @@ int PowerManager::power_down(bool fault) {
     dac.end();
 
     // TODO: check states of load switch (should already be suspended
-    // if all devieses have been terminated correctly)
+    // if all devices have been terminated correctly)
 
-    // turn off error led
+    // Turn off error led
 	gpio_pin_set_dt(&error_led, 0);
 
     if (charging) {
@@ -649,6 +642,11 @@ int PowerManager::power_down(bool fault) {
         sys_reboot(SYS_REBOOT_COLD);
         return 0;
     }
+
+    // Disable EN_LS_LDO in the BQ25120A so the 3.3V LDO is fully off
+    battery_controller.exit_high_impedance();
+    battery_controller.write_LS_control(false);
+    battery_controller.enter_high_impedance();
 
     ret = pm_device_action_run(ls_sd,  PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_3_3, PM_DEVICE_ACTION_SUSPEND);
