@@ -166,18 +166,22 @@ int SDCardManager::unmount() {
 
 		this->mounted = false;
 
-		release_ls();
-
 #if defined(CONFIG_USB_DEVICE_STACK_NEXT) && defined(CONFIG_USBD_MSC_CLASS)
-		/* Re-enable USB so the host can access the SD card via MSC */
+		/* Re-enable USB so the host can access the SD card via MSC.
+		 * Keep load switches on — USB MSC needs the SD card powered. */
 		if (g_usbd) {
 			ret = usbd_enable(g_usbd);
 			if (ret) {
 				LOG_ERR("Failed to re-enable USB: %d", ret);
+				release_ls();
 			} else {
 				LOG_INF("USB MSC re-enabled");
 			}
+		} else {
+			release_ls();
 		}
+#else
+		release_ls();
 #endif
 	}
 
