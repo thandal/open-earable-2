@@ -8,6 +8,9 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(openearable_v2_1)
 
+# Suppress -Wwrite-strings from Zephyr SDK headers that we cannot fix.
+add_compile_options(-Wno-write-strings)
+
 string(TIMESTAMP NRF5340_AUDIO_CORE_APP_COMP_DATE "%a %b %d %H:%M:%S %Y")
 
 # Generate fw_info_app.c
