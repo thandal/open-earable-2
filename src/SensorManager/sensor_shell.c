@@ -8,6 +8,7 @@
  *   sensor stop <sensor|all>
  *   sensor info
  *   sensor stress <sd|stream|all> [duration_s]
+ *   sensor nominal <sd|stream|all> [duration_s]
  */
 
 #include <zephyr/shell/shell.h>
@@ -233,6 +234,60 @@ static int cmd_sensor_stress(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
+struct nominal_rate {
+	enum sensor_id id;
+	uint8_t rate_idx;
+};
+
+static const struct nominal_rate nominal_rates[] = {
+	{ ID_IMU,              2 },  /* 100 Hz */
+	{ ID_PPG,              1 },  /* 50 Hz */
+	{ ID_OPTTEMP,          3 },  /* 4 Hz */
+	{ ID_TEMP_BARO,       14 },  /* 25 Hz */
+	{ ID_BONE_CONDUCTION,  9 },  /* 6400 Hz (max) */
+	{ ID_MICRO,            0 },  /* 48000 Hz */
+};
+
+/* sensor nominal <sd|stream|all> [duration_s] */
+static int cmd_sensor_nominal(const struct shell *sh, size_t argc, char **argv)
+{
+	if (argc < 2) {
+		shell_error(sh, "Usage: sensor nominal <sd|stream|all> [duration_s]");
+		return -EINVAL;
+	}
+
+	uint8_t storage = parse_storage_opts(argv[1]);
+	if (storage == 0) {
+		shell_error(sh, "Invalid option '%s'. Use: sd, stream, all", argv[1]);
+		return -EINVAL;
+	}
+
+	int duration_s = (argc > 2) ? atoi(argv[2]) : 0;
+
+	shell_print(sh, "Starting all sensors at nominal rates, opts=0x%02x", storage);
+
+	for (size_t i = 0; i < ARRAY_SIZE(nominal_rates); i++) {
+		const struct nominal_rate *nr = &nominal_rates[i];
+		float rate = getSampleRateForSensorId((uint8_t)nr->id, nr->rate_idx);
+		shell_print(sh, "  %s: rate_idx=%u (%.1f Hz)",
+			    sensor_id_to_name(nr->id), nr->rate_idx, (double)rate);
+
+		configure_one_sensor(nr->id, nr->rate_idx, storage);
+		k_msleep(50);
+	}
+
+	if (duration_s > 0) {
+		shell_print(sh, "Running for %d seconds...", duration_s);
+		k_sleep(K_SECONDS(duration_s));
+		stop_sensor_manager();
+		shell_print(sh, "Nominal test complete, all sensors stopped");
+	} else {
+		shell_print(sh, "Sensors running. Use 'sensor stop all' to stop.");
+	}
+
+	return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(sensor_cmds,
 	SHELL_CMD_ARG(start, NULL,
 		"Start a sensor: sensor start <imu|baro|micro|ppg|temp|bone> <rate_idx> [sd|stream|all]",
@@ -244,6 +299,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sensor_cmds,
 	SHELL_CMD_ARG(stress, NULL,
 		"Stress test: sensor stress <sd|stream|all> [duration_s]",
 		cmd_sensor_stress, 2, 1),
+	SHELL_CMD_ARG(nominal, NULL,
+		"Nominal rates: sensor nominal <sd|stream|all> [duration_s]",
+		cmd_sensor_nominal, 2, 1),
 	SHELL_SUBCMD_SET_END
 );
 
