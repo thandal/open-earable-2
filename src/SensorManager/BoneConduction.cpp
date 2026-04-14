@@ -145,14 +145,13 @@ void BoneConduction::start(int sample_rate_idx) {
     t_sample_us = 1e6 / sample_rates.true_sample_rates[sample_rate_idx];
 
     int word_size = 3 * sizeof(int16_t) + 1;
-    _num_samples_buffered = MIN(MAX(1, (int) (CONFIG_SENSOR_LATENCY_MS * 1e3 / t_sample_us)), 1024 / word_size - 8); // Buffer size is 1024 bytes
+    int fifo_capacity = 1024 / word_size;
+    int latency_samples = (int)(CONFIG_SENSOR_LATENCY_MS * 1e3 / t_sample_us);
+    _num_samples_buffered = MIN(MAX(1, latency_samples), fifo_capacity / 2);
 
     bma580.init(sample_rates.reg_vals[sample_rate_idx], _num_samples_buffered * word_size);
     bma580.start();
 
-    // Fire at FIFO-read rate, not per-sample rate.
-    // At 6400Hz: ~10ms interval, ~65 samples/read, ~100 transactions/sec
-    // instead of 156µs interval, ~6 samples/read, ~1067 transactions/sec.
     k_timeout_t t = K_USEC(t_sample_us * _num_samples_buffered);
 	k_timer_start(&sensor.sensor_timer, K_NO_WAIT, t);
 

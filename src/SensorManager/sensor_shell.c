@@ -241,7 +241,7 @@ struct nominal_rate {
 
 static const struct nominal_rate nominal_rates[] = {
 	{ ID_IMU,              2 },  /* 100 Hz */
-	{ ID_PPG,              1 },  /* 50 Hz */
+	{ ID_PPG,              0 },  /* 25 Hz */
 	{ ID_OPTTEMP,          3 },  /* 4 Hz */
 	{ ID_TEMP_BARO,       14 },  /* 25 Hz */
 	{ ID_BONE_CONDUCTION,  9 },  /* 6400 Hz (max) */

@@ -194,6 +194,9 @@ void SDLogger::sensor_sd_task() {
             k_mutex_lock(&ring_mutex, K_FOREVER);
             ring_buf_get_finish(&ring_buffer, (uint32_t)written);
             k_mutex_unlock(&ring_mutex);
+
+            // Let lower-priority threads (sensor work queue) run between writes
+            k_yield();
         }
 
         STACK_USAGE_PRINT("sensor_msg_thread", &sdlogger.thread_data);
