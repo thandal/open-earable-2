@@ -27,18 +27,17 @@ SENSOR_SID = {
 }
 SID_NAME = {v: k for k, v in SENSOR_SID.items()}
 
-# Expected timing for each sensor
-SENSOR_EXPECTED = {
-    "microphone": {
-        "frames_per_packet": 48,
-        "sample_rate": 48000,
-        "nominal_interval_ms": 1.0,  # 48 frames / 48kHz
-    },
-    "bone_acc": {
-        "samples_per_packet": 6,
-        "fallback_rate": 6397.0,
-        "nominal_interval_ms": 0.94,
-    },
+# Per-sample sizes for multi-sample sensors (used to compute samples per packet)
+SAMPLE_SIZES = {
+    "bone_acc": 6,   # 3 × int16
+    "ppg": 16,       # 4 × uint32
+}
+
+# Microphone-specific config
+MIC_CONFIG = {
+    "frames_per_packet": 48,
+    "sample_rate": 48000,
+    "nominal_interval_ms": 1.0,
 }
 
 
@@ -57,10 +56,24 @@ def parse_file_header(f):
     return version, timestamp, device_id, channel
 
 
+def count_samples(name, size):
+    """Return the number of samples in a packet given its sensor name and payload size."""
+    sample_size = SAMPLE_SIZES.get(name)
+    if sample_size is None:
+        if name == "microphone":
+            return size // (2 * 2)  # 2 channels, 2 bytes each
+        return 1
+
+    if size == sample_size:
+        return 1
+    if (size - 2) % sample_size == 0:
+        return (size - 2) // sample_size
+    return size // sample_size
+
+
 def parse_packets(f, version):
     """Parse all packets, returning dict of sensor_name -> list of (timestamp_s, n_samples)."""
     packets = defaultdict(list)
-    sample_size_bone = struct.calcsize("<3h")  # 6 bytes
 
     while True:
         header = f.read(10)
@@ -76,21 +89,7 @@ def parse_packets(f, version):
 
         ts = time / 1e6
         name = SID_NAME.get(sid, f"sid{sid}")
-
-        if sid == SENSOR_SID["microphone"]:
-            # 96 int16 samples = 48 stereo frames per packet
-            n_frames = size // (2 * 2)  # 2 channels, 2 bytes each
-            packets[name].append((ts, n_frames))
-        elif sid == SENSOR_SID["bone_acc"]:
-            if size == sample_size_bone:
-                n_samples = 1
-            elif (size - 2) % sample_size_bone == 0:
-                n_samples = (size - 2) // sample_size_bone
-            else:
-                n_samples = size // sample_size_bone
-            packets[name].append((ts, n_samples))
-        else:
-            packets[name].append((ts, 1))
+        packets[name].append((ts, count_samples(name, size)))
 
     parsed_to = f.tell()
     return packets, parsed_to
@@ -131,37 +130,37 @@ def analyze_sensor(name, entries):
         big_gaps = sorted(diffs[big_mask] * 1000, reverse=True)
         stats["largest_gaps_ms"] = big_gaps[:15]
 
-    # Sensor-specific loss estimates
+    # Microphone normal-interval check
     if name == "microphone":
-        cfg = SENSOR_EXPECTED["microphone"]
-        expected_packets = span / (cfg["nominal_interval_ms"] / 1000)
-        stats["expected_packets"] = int(expected_packets)
-        stats["packet_loss_pct"] = (1 - len(timestamps) / expected_packets) * 100
-        dropped = expected_packets - len(timestamps)
-        stats["dropped_time_s"] = dropped * cfg["frames_per_packet"] / cfg["sample_rate"]
-
-        # Normal interval check
         normal = (diffs >= 0.0008) & (diffs <= 0.0012)
         stats["normal_interval_pct"] = normal.sum() / len(diffs) * 100
 
-    elif name == "bone_acc":
-        cfg = SENSOR_EXPECTED["bone_acc"]
-        # Estimate true rate from normal intervals
-        normal_mask = diffs < 0.002
+    # Multi-sample packet distribution
+    if name in SAMPLE_SIZES:
+        unique, counts = np.unique(sample_counts, return_counts=True)
+        stats["samples_per_packet_dist"] = dict(zip(unique.astype(int).tolist(), counts.tolist()))
+
+    # Estimate sample rate and compute dropout for all sensors.
+    if name == "microphone":
+        # Known fixed rate; frame counts don't reflect the true sample rate
+        est_rate = MIC_CONFIG["sample_rate"]
+    else:
+        # Use the median of per-interval sample rates from "normal" intervals
+        # (below 2× the median interval) to reject gaps.
+        median_diff = float(np.median(diffs))
+        normal_mask = diffs < (2 * median_diff)
         if normal_mask.any():
             normal_rates = sample_counts[:-1][normal_mask] / diffs[normal_mask]
             est_rate = float(np.median(normal_rates))
         else:
-            est_rate = cfg["fallback_rate"]
+            est_rate = total_samples / span if span > 0 else 0
+
+    if est_rate > 0:
         stats["estimated_rate_hz"] = est_rate
         expected_samples = span * est_rate
         stats["expected_samples"] = int(expected_samples)
         stats["sample_loss_pct"] = (1 - total_samples / expected_samples) * 100
         stats["dropped_time_s"] = (expected_samples - total_samples) / est_rate
-
-        # Sample count distribution
-        unique, counts = np.unique(sample_counts, return_counts=True)
-        stats["samples_per_packet_dist"] = dict(zip(unique.astype(int).tolist(), counts.tolist()))
 
     return stats
 
@@ -194,7 +193,7 @@ def print_report(filename, version, timestamp_us, device_id, channel,
         if stats["time_span_s"] == 0:
             continue
 
-        if stats.get("total_samples") and name in ("bone_acc",):
+        if name in SAMPLE_SIZES:
             print(f"  Total samples: {stats['total_samples']:,}")
 
         print(f"  Interval (ms): median={stats['interval_median_ms']:.3f}, "
@@ -218,15 +217,12 @@ def print_report(filename, version, timestamp_us, device_id, channel,
             gaps_str = ", ".join(f"{g:.1f}" for g in stats["largest_gaps_ms"][:10])
             print(f"  Largest gaps (ms): [{gaps_str}]")
 
-        # Loss estimates
-        if name == "microphone":
-            print(f"  Expected packets: {stats.get('expected_packets', '?'):,}")
-            print(f"  Packet loss: {stats.get('packet_loss_pct', 0):.2f}%")
-            print(f"  Dropped time: {stats.get('dropped_time_s', 0):.2f}s")
-        elif name == "bone_acc":
-            print(f"  Estimated rate: {stats.get('estimated_rate_hz', 0):.1f} Hz")
+        # Loss estimates (for all sensors)
+        if "estimated_rate_hz" in stats:
+            print(f"  Estimated rate: {stats['estimated_rate_hz']:.1f} Hz")
             print(f"  Expected samples: {stats.get('expected_samples', '?'):,}")
-            print(f"  Sample loss: {stats.get('sample_loss_pct', 0):.2f}%")
+            loss = stats.get('sample_loss_pct', 0)
+            print(f"  Sample loss: {loss:.2f}%")
             print(f"  Dropped time: {stats.get('dropped_time_s', 0):.2f}s")
             if "samples_per_packet_dist" in stats:
                 print(f"  Samples/packet: {stats['samples_per_packet_dist']}")
@@ -266,15 +262,17 @@ def print_report(filename, version, timestamp_us, device_id, channel,
         else:
             print(f"\n  WARNING: No time overlap between all sensors!")
 
-    # Comparison with baseline (from README known issues)
-    if "microphone" in packets or "bone_acc" in packets:
-        print(f"\n--- COMPARISON WITH BASELINE (dataset1) ---")
-        if "microphone" in packets:
-            s = analyze_sensor("microphone", packets["microphone"])
-            print(f"  Mic packet loss:  {s.get('packet_loss_pct', 0):.2f}%  (baseline: ~3-4%)")
-        if "bone_acc" in packets:
-            s = analyze_sensor("bone_acc", packets["bone_acc"])
-            print(f"  Bone sample loss: {s.get('sample_loss_pct', 0):.2f}%  (baseline: ~25%)")
+    # Dropout summary across all sensors
+    print(f"\n--- DROPOUT SUMMARY ---")
+    for name in present:
+        entries = packets[name]
+        s = analyze_sensor(name, entries)
+        loss = s.get("sample_loss_pct")
+        if loss is not None:
+            rate = s.get("estimated_rate_hz", 0)
+            total = s.get("total_samples", len(entries))
+            expected = s.get("expected_samples", total)
+            print(f"  {name:<15} {loss:6.2f}%  ({total:,} / {expected:,} samples, {rate:.1f} Hz)")
 
     print()
 
