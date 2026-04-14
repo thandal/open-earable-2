@@ -154,21 +154,6 @@ bool Adafruit_BMP3XX::_init(void) {
   if (settings_rslt != BMP3_OK)
     return false;
 
-  fifo.data.buffer = fifo_buf;
-  fifo.data.req_frames = 10;
-  the_sensor.fifo = &fifo;
-
-  fifo.settings.mode = BMP3_ENABLE;
-  fifo.settings.press_en = BMP3_ENABLE;
-  fifo.settings.temp_en = BMP3_ENABLE;
-  fifo.settings.time_en = BMP3_DISABLE;
-  fifo.settings.stop_on_full_en = BMP3_DISABLE;
-
-  settings_rslt = bmp3_set_fifo_settings(BMP3_SEL_FIFO_MODE | BMP3_SEL_FIFO_PRESS_EN |
-                                          BMP3_SEL_FIFO_TEMP_EN, &the_sensor);
-  if (settings_rslt != BMP3_OK)
-    return false;
-
   the_sensor.settings.op_mode = BMP3_MODE_NORMAL;
   settings_rslt = bmp3_set_op_mode(&the_sensor);
   if (settings_rslt != BMP3_OK)
@@ -244,11 +229,7 @@ bool Adafruit_BMP3XX::performReading(void) {
   int8_t rslt;
   struct bmp3_data data;
 
-  rslt = bmp3_get_fifo_data(&the_sensor);
-  if (rslt != BMP3_OK)
-    return false;
-
-  rslt = bmp3_extract_fifo_data(&data, &the_sensor);
+  rslt = bmp3_get_sensor_data(BMP3_TEMP | BMP3_PRESS, &data, &the_sensor);
   if (rslt != BMP3_OK)
     return false;
 

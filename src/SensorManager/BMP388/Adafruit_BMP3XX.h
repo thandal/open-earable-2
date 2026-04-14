@@ -81,8 +81,6 @@ private:
   //uint8_t spixfer(uint8_t x);
 
   struct bmp3_dev the_sensor;
-  struct bmp3_fifo fifo;
-  uint8_t fifo_buf[512 + 4];
 
   bool detect(int address);
 
