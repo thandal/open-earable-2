@@ -37,7 +37,7 @@ EdgeMlSensor * get_sensor(enum sensor_id id);
 
 static sensor_manager_state _state;
 
-K_MSGQ_DEFINE(sensor_queue, sizeof(struct sensor_msg), 256, 4);
+K_MSGQ_DEFINE(sensor_queue, sizeof(struct sensor_msg), 160, 4);
 K_MSGQ_DEFINE(config_queue, sizeof(struct sensor_config), 16, 4);
 
 K_THREAD_STACK_DEFINE(sensor_work_q_stack, CONFIG_SENSOR_WORK_QUEUE_STACK_SIZE);
@@ -65,18 +65,29 @@ int active_sensors = 0;
 
 static void config_work_handler(struct k_work *work);
 
+static uint32_t pub_count;
+static uint32_t pub_max_us;
+static uint64_t pub_total_us;
+
 void sensor_chan_update(void *p1, void *p2, void *p3) {
     int ret;
 
 	while (1) {
-		// Block until a message is available. k_msgq_get with K_FOREVER
-		// sleeps the thread and wakes it when a producer enqueues.
 		ret = k_msgq_get(&sensor_queue, &msg, K_FOREVER);
 		if (ret) {
 			continue;
 		}
 
+		uint64_t t0 = micros();
 		ret = zbus_chan_pub(&sensor_chan, &msg, K_FOREVER);
+		uint32_t elapsed = (uint32_t)(micros() - t0);
+
+		pub_count++;
+		pub_total_us += elapsed;
+		if (elapsed > pub_max_us) {
+			pub_max_us = elapsed;
+		}
+
 		if (ret) {
 			LOG_ERR("Failed to publish sensor msg, ret: %d", ret);
 		}
@@ -145,6 +156,12 @@ void stop_sensor_manager() {
 	// Purge any remaining sensor messages so the publish thread
 	// doesn't keep feeding stale data to zbus/SDLogger.
 	k_msgq_purge(&sensor_queue);
+
+	uint32_t pub_avg = pub_count ? (uint32_t)(pub_total_us / pub_count) : 0;
+	LOG_INF("Pub stats: count=%u avg=%u us max=%u us", pub_count, pub_avg, pub_max_us);
+	pub_count = 0;
+	pub_total_us = 0;
+	pub_max_us = 0;
 
 	//k_thread_suspend(sensor_pub_id);
 	k_poll_signal_reset(&sensor_manager_sig);

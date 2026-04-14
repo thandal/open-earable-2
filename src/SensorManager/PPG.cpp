@@ -15,6 +15,7 @@ PPG PPG::sensor;
 MAXM86161 PPG::ppg(&I2C2);
 
 static struct sensor_msg msg_ppg;
+static uint32_t ppg_queue_full_count;
 
 const SampleRateSetting<16> PPG::sample_rates = {
     { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x0A, 0x0B,
@@ -119,7 +120,7 @@ void PPG::update_sensor(struct k_work *work) {
 
             int ret = k_msgq_put(sensor_queue, &msg_ppg, K_NO_WAIT);
             if (ret) {
-                LOG_WRN("sensor msg queue full");
+                ppg_queue_full_count++;
             }
 
             written += to_write;
@@ -158,6 +159,11 @@ void PPG::stop() {
     _active = false;
 
     _running = false;
+
+    if (ppg_queue_full_count > 0) {
+        LOG_WRN("ppg queue full drops: %u", ppg_queue_full_count);
+        ppg_queue_full_count = 0;
+    }
 
 	k_timer_stop(&sensor.sensor_timer);
 	k_work_cancel(&sensor.sensor_work);
