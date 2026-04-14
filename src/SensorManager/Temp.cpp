@@ -1,6 +1,7 @@
 #include "Temp.h"
 
 #include "SensorManager.h"
+#include "sensor_sink.h"
 
 #include "math.h"
 #include "stdlib.h"
@@ -22,8 +23,7 @@ const SampleRateSetting<8> Temp::sample_rates = {
     { 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0 }        // true_sample_rates
 };
 
-bool Temp::init(struct k_msgq * queue) {
-
+bool Temp::init() {
     if (!_active) {
         pm_device_runtime_get(ls_1_8);
         pm_device_runtime_get(ls_3_3);
@@ -40,8 +40,6 @@ bool Temp::init(struct k_msgq * queue) {
 		return false;
     }
 
-	sensor_queue = queue;
-	
 	k_work_init(&sensor.sensor_work, update_sensor);
 	k_timer_init(&sensor.sensor_timer, sensor_timer_handler, NULL);
 
@@ -76,10 +74,7 @@ void Temp::update_sensor(struct k_work *work) {
 
     memcpy(msg_temp.data.data, &temperature, sizeof(float));
 
-    int ret = k_msgq_put(sensor_queue, &msg_temp, K_NO_WAIT);
-    if (ret) {
-        LOG_WRN("sensor msg queue full");
-    }
+    sensor_sink_put(&msg_temp);
 
     uint32_t elapsed = (uint32_t)(micros() - t0);
     temp_calls++;

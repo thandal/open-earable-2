@@ -1,6 +1,7 @@
 #include "BoneConduction.h"
 
 #include "SensorManager.h"
+#include "sensor_sink.h"
 
 #include "math.h"
 #include "stdlib.h"
@@ -34,7 +35,7 @@ const SampleRateSetting<10> BoneConduction::sample_rates = {
     { 12.5, 25.0, 50.0, 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0 }   // true_sample_rates
 };
 
-bool BoneConduction::init(struct k_msgq * queue) {
+bool BoneConduction::init() {
     if (!_active) {
         pm_device_runtime_get(ls_1_8);
         pm_device_runtime_get(ls_3_3);
@@ -42,7 +43,7 @@ bool BoneConduction::init(struct k_msgq * queue) {
     	_active = true;
 	}
 
-    if (bma580.init() != 0) {   // hardware I2C mode, can pass in address & alt Wire
+    if (bma580.init() != 0) {
 		LOG_WRN("Could not find a valid bone conduction sensor, check wiring!");
         _active = false;
         pm_device_runtime_put(ls_1_8);
@@ -50,8 +51,6 @@ bool BoneConduction::init(struct k_msgq * queue) {
 		return false;
     }
 
-	sensor_queue = queue;
-	
 	k_work_init(&sensor.sensor_work, update_sensor);
 	k_timer_init(&sensor.sensor_timer, sensor_timer_handler, NULL);
 
@@ -117,7 +116,7 @@ void BoneConduction::update_sensor(struct k_work *work) {
             memcpy(&msg_bc.data.data, &sensor.fifo_acc_data[written], _size);
         }
 
-        int ret = k_msgq_put(sensor_queue, &msg_bc, K_NO_WAIT);
+        int ret = sensor_sink_put(&msg_bc);
         if (ret) {
             bc_queue_full_count++;
         }

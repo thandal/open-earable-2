@@ -1,9 +1,9 @@
 #include "IMU.h"
 
 #include "SensorManager.h"
+#include "sensor_sink.h"
 
 #include <zephyr/kernel.h>
-#include <zephyr/zbus/zbus.h>
 #include <zephyr/device.h>
 
 #include <zephyr/logging/log.h>
@@ -80,7 +80,7 @@ void IMU::update_sensor(struct k_work *work)
         memcpy(msg_imu.data.data + axis_sz, _batch[i].gyro, axis_sz);
         memcpy(msg_imu.data.data + 2 * axis_sz, _batch[i].mag, axis_sz);
 
-        int ret = k_msgq_put(sensor_queue, &msg_imu, K_NO_WAIT);
+        int ret = sensor_sink_put(&msg_imu);
         if (ret) imu_queue_full_count++;
     }
 
@@ -94,7 +94,7 @@ void IMU::sensor_timer_handler(struct k_timer *dummy)
     k_work_submit_to_queue(&sensor_work_q, &sensor.sensor_work);
 }
 
-bool IMU::init(struct k_msgq * queue)
+bool IMU::init()
 {
     if (!_active) {
         pm_device_runtime_get(ls_1_8);
@@ -111,8 +111,6 @@ bool IMU::init(struct k_msgq * queue)
         _active = false;
         return false;
     }
-
-    sensor_queue = queue;
 
     k_work_init(&sensor.sensor_work, update_sensor);
     k_timer_init(&sensor.sensor_timer, sensor_timer_handler, NULL);

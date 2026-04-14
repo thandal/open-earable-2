@@ -5,8 +5,6 @@
 #include "macros_common.h"
 #include "openearable_common.h"
 
-#include <zephyr/zbus/zbus.h>
-
 #include "IMU.h"
 #include "Baro.h"
 #include "PPG.h"
@@ -25,7 +23,6 @@
 #include <sensor_service.h>
 
 #include <zephyr/logging/log.h>
-#include <sensor_service.h>
 LOG_MODULE_DECLARE(sensor_manager);
 
 std::set<int> ble_sensors = {};
@@ -35,62 +32,21 @@ EdgeMlSensor * get_sensor(enum sensor_id id);
 
 static sensor_manager_state _state;
 
-K_MSGQ_DEFINE(sensor_queue, sizeof(struct sensor_msg), 256, 4);
 K_MSGQ_DEFINE(config_queue, sizeof(struct sensor_config), 16, 4);
 
 K_THREAD_STACK_DEFINE(sensor_work_q_stack, CONFIG_SENSOR_WORK_QUEUE_STACK_SIZE);
-
-ZBUS_CHAN_DEFINE(sensor_chan, struct sensor_msg, NULL, NULL, ZBUS_OBSERVERS_EMPTY,
-		 ZBUS_MSG_INIT(0));
 
 static struct k_poll_signal sensor_manager_sig;
 static struct k_poll_event sensor_manager_evt =
 		 K_POLL_EVENT_INITIALIZER(K_POLL_TYPE_SIGNAL, K_POLL_MODE_NOTIFY_ONLY, &sensor_manager_sig);
 
-struct sensor_msg msg;
-
-struct k_thread sensor_publish;
-
-static k_tid_t sensor_pub_id;
-
 static struct k_work config_work;
 
 struct k_work_q sensor_work_q;
 
-K_THREAD_STACK_DEFINE(sensor_publish_thread_stack, CONFIG_SENSOR_PUB_STACK_SIZE);
-
 int active_sensors = 0;
 
 static void config_work_handler(struct k_work *work);
-
-static uint32_t pub_count;
-static uint32_t pub_max_us;
-static uint64_t pub_total_us;
-
-void sensor_chan_update(void *p1, void *p2, void *p3) {
-    int ret;
-
-	while (1) {
-		ret = k_msgq_get(&sensor_queue, &msg, K_FOREVER);
-		if (ret) {
-			continue;
-		}
-
-		uint64_t t0 = micros();
-		ret = zbus_chan_pub(&sensor_chan, &msg, K_FOREVER);
-		uint32_t elapsed = (uint32_t)(micros() - t0);
-
-		pub_count++;
-		pub_total_us += elapsed;
-		if (elapsed > pub_max_us) {
-			pub_max_us = elapsed;
-		}
-
-		if (ret) {
-			LOG_ERR("Failed to publish sensor msg, ret: %d", ret);
-		}
-	}
-}
 
 void init_sensor_manager() {
 	_state = INIT;
@@ -101,10 +57,6 @@ void init_sensor_manager() {
 	k_work_queue_start(&sensor_work_q, sensor_work_q_stack,
                    K_THREAD_STACK_SIZEOF(sensor_work_q_stack), K_PRIO_PREEMPT(CONFIG_SENSOR_WORK_QUEUE_PRIO),
                    NULL);
-
-	sensor_pub_id = k_thread_create(&sensor_publish, sensor_publish_thread_stack, CONFIG_SENSOR_PUB_STACK_SIZE,
-		sensor_chan_update, NULL, NULL, NULL,
-			K_PRIO_PREEMPT(CONFIG_SENSOR_PUB_THREAD_PRIO), 0, K_FOREVER);
 
 	k_work_init(&config_work, config_work_handler);
 
@@ -118,16 +70,10 @@ void start_sensor_manager() {
 
 	LOG_DBG("Starting sensor manager");
 
-	//empty message queue
-	k_msgq_purge(&sensor_queue);
 	k_work_queue_unplug(&sensor_work_q);
 
 	ble_sensors.clear();
 	sd_sensors.clear();
-
-	if (_state == INIT) {
-		k_thread_start(sensor_pub_id);
-	}
 
 	k_poll_signal_raise(&sensor_manager_sig, 0);
 
@@ -149,16 +95,6 @@ void stop_sensor_manager() {
 	active_sensors = 0;
 
 	k_work_queue_drain(&sensor_work_q, true);
-
-	// Purge any remaining sensor messages so the publish thread
-	// doesn't keep feeding stale data to zbus/SDLogger.
-	k_msgq_purge(&sensor_queue);
-
-	uint32_t pub_avg = pub_count ? (uint32_t)(pub_total_us / pub_count) : 0;
-	LOG_INF("Pub stats: count=%u avg=%u us max=%u us", pub_count, pub_avg, pub_max_us);
-	pub_count = 0;
-	pub_total_us = 0;
-	pub_max_us = 0;
 
 	k_poll_signal_reset(&sensor_manager_sig);
 
@@ -188,7 +124,6 @@ EdgeMlSensor * get_sensor(enum sensor_id id) {
 	}
 }
 
-// Process a single sensor configuration entry.
 static void process_sensor_config(struct sensor_config &config) {
 	float sampleRate = getSampleRateForSensorId(config.sensorId, config.sampleRateIndex);
 	if (sampleRate <= 0) {
@@ -216,7 +151,6 @@ static void process_sensor_config(struct sensor_config &config) {
 	sensor->sd_logging(config.storageOptions & DATA_STORAGE);
 	sensor->ble_stream(config.storageOptions & DATA_STREAMING);
 
-	// Open SD logger before starting the sensor so no data is lost
 	if (config.storageOptions & DATA_STORAGE) {
 		sd_sensors.insert(config.sensorId);
 
@@ -237,7 +171,7 @@ static void process_sensor_config(struct sensor_config &config) {
 	}
 
 	if (config.storageOptions & (DATA_STORAGE | DATA_STREAMING)) {
-		if (sensor->init(&sensor_queue)) {
+		if (sensor->init()) {
 			if (active_sensors == 0) start_sensor_manager();
 			sensor->start(config.sampleRateIndex);
 			if (sensor->is_running()) {
@@ -249,8 +183,6 @@ static void process_sensor_config(struct sensor_config &config) {
 	if (config.storageOptions & DATA_STREAMING) ble_sensors.insert(config.sensorId);
 	else if (ble_sensors.find(config.sensorId) != ble_sensors.end()) {
 		ble_sensors.erase(config.sensorId);
-
-		// TODO: if (ble_sensors.empty()) ...
 	}
 
 	set_sensor_config_status(config);
@@ -258,8 +190,6 @@ static void process_sensor_config(struct sensor_config &config) {
 	if (active_sensors == 0) stop_sensor_manager();
 }
 
-// Drains all queued configs so that rapid submissions (e.g. stress test)
-// are not lost when k_work_submit() is a no-op for already-pending work.
 static void config_work_handler(struct k_work *work) {
 	struct sensor_config config;
 
@@ -275,7 +205,5 @@ void config_sensor(struct sensor_config * config) {
 		return;
 	}
 
-	//k_work_queue_drain(&sensor_work_q, true);
 	k_work_submit(&config_work);
-	//k_work_queue_unplug(&sensor_work_q);
 }

@@ -1,6 +1,7 @@
 #include "PPG.h"
 
 #include "SensorManager.h"
+#include "sensor_sink.h"
 
 #include "math.h"
 #include "stdlib.h"
@@ -30,7 +31,7 @@ const SampleRateSetting<16> PPG::sample_rates = {
     32.000, 64.000, 128.000, 256.000, 512.000, 1024.000, 2048.000, 4096.000},
 };
 
-bool PPG::init(struct k_msgq * queue) {
+bool PPG::init() {
     if (!_active) {
         pm_device_runtime_get(ls_1_8);
         pm_device_runtime_get(ls_3_3);
@@ -60,8 +61,6 @@ bool PPG::init(struct k_msgq * queue) {
 		return false;
     }
 
-	sensor_queue = queue;
-	
 	k_work_init(&sensor.sensor_work, update_sensor);
 	k_timer_init(&sensor.sensor_timer, sensor_timer_handler, NULL);
 
@@ -123,7 +122,7 @@ void PPG::update_sensor(struct k_work *work) {
                 memcpy(&msg_ppg.data.data, &sensor.data_buffer[written], _size);
             }
 
-            int ret = k_msgq_put(sensor_queue, &msg_ppg, K_NO_WAIT);
+            int ret = sensor_sink_put(&msg_ppg);
             if (ret) {
                 ppg_queue_full_count++;
             }

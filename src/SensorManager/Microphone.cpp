@@ -38,13 +38,8 @@ const SampleRateSetting<1> Microphone::sample_rates = {
 	{ 48000.0 }
 };
 
-bool Microphone::init(struct k_msgq * queue) {
-
+bool Microphone::init() {
 	_active = true;
-
-	sensor_queue = queue;
-
-	set_sensor_queue(queue);
 
 	init_fifo();
 

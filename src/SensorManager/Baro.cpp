@@ -1,9 +1,9 @@
 #include "Baro.h"
 
 #include "SensorManager.h"
+#include "sensor_sink.h"
 
 #include <zephyr/kernel.h>
-#include <zephyr/zbus/zbus.h>
 #include <zephyr/device.h>
 
 #include <zephyr/logging/log.h>
@@ -62,10 +62,7 @@ void Baro::update_sensor(struct k_work *work) {
 
 	memcpy(msg_baro.data.data, data, 2 * sizeof(float));
 
-	ret = k_msgq_put(sensor_queue, &msg_baro, K_NO_WAIT);
-	if (ret) {
-		LOG_WRN("sensor msg queue full");
-	}
+	sensor_sink_put(&msg_baro);
 
 	uint32_t elapsed = (uint32_t)(micros() - t0);
 	baro_calls++;
@@ -81,7 +78,7 @@ void Baro::sensor_timer_handler(struct k_timer *dummy)
 	k_work_submit_to_queue(&sensor_work_q, &sensor.sensor_work);
 };
 
-bool Baro::init(struct k_msgq * queue) {
+bool Baro::init() {
 	if (!_active) {
 		pm_device_runtime_get(ls_1_8);
     	_active = true;
@@ -94,8 +91,6 @@ bool Baro::init(struct k_msgq * queue) {
 		return false;
     }
 
-	sensor_queue = queue;
-	
 	k_work_init(&sensor.sensor_work, update_sensor);
 	k_timer_init(&sensor.sensor_timer, sensor_timer_handler, NULL);
 

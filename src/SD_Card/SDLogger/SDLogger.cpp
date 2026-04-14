@@ -17,14 +17,7 @@ LOG_MODULE_REGISTER(sd_logger, CONFIG_LOG_DEFAULT_LEVEL);
 
 ZBUS_CHAN_DECLARE(sd_card_chan);
 
-void sensor_listener_cb(const struct zbus_channel *chan);
-
-ZBUS_LISTENER_DEFINE(sensor_data_listener, sensor_listener_cb);
-
-// Define thread stack
 K_THREAD_STACK_DEFINE(thread_stack, CONFIG_SENSOR_SD_STACK_SIZE);
-
-ZBUS_CHAN_DECLARE(sensor_chan);
 
 void sd_listener_callback(const struct zbus_channel *chan);
 
@@ -69,20 +62,6 @@ SDLogger::SDLogger() {
 SDLogger::~SDLogger() {
 
 }
-
-//static bool _prio_boost = false;
-
-void sensor_listener_cb(const struct zbus_channel *chan) {
-    const sensor_msg* msg = (sensor_msg*)zbus_chan_const_msg(chan);
-
-	if (msg->sd) {
-        int ret = sdlogger.write_sensor_data(msg->data);
-        if (ret < 0) {
-            LOG_WRN("Failed to enqueue sensor data for SD: %d", ret);
-        }
-	}
-}
-
 
 void sd_listener_callback(const struct zbus_channel *chan)
 {
@@ -225,12 +204,6 @@ int SDLogger::init() {
 		LOG_ERR("Failed to create sensor_msg thread");
 		return ret;
 	}
-
-    ret = zbus_chan_add_obs(&sensor_chan, &sensor_data_listener, ZBUS_ADD_OBS_TIMEOUT_MS);
-    if (ret) {
-        LOG_ERR("Failed to add sensor sub");
-        return ret;
-    }
 
     ret = zbus_chan_add_obs(&sd_card_chan, &sd_card_event_listener, ZBUS_ADD_OBS_TIMEOUT_MS);
 	if (ret) {

@@ -171,11 +171,6 @@ static struct {
 
 #define SENQUEUE_FRAME_SIZE 32
 
-static struct k_msgq * sensor_queue;
-
-//extern struct audio_data fifo_rx;
-
-//K_MSGQ_DEFINE(rx_queue, sizeof(struct audio_data), 16, 4);
 extern struct k_msgq encoder_queue;
 
 // Definition eines zbus-Kanals
@@ -264,12 +259,6 @@ static void data_thread(void *arg1, void *arg2, void *arg3)
 {
 	ring_buffer = buf;
 }*/
-
-void set_sensor_queue(struct k_msgq *queue)
-{
-	sensor_queue = queue;
-}
-
 
 void record_to_sd(bool active) {
 	_record_to_sd = active;
