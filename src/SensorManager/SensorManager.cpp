@@ -31,13 +31,11 @@ LOG_MODULE_DECLARE(sensor_manager);
 std::set<int> ble_sensors = {};
 std::set<int> sd_sensors = {};
 
-//extern struct k_msgq sensor_queue;
-
 EdgeMlSensor * get_sensor(enum sensor_id id);
 
 static sensor_manager_state _state;
 
-K_MSGQ_DEFINE(sensor_queue, sizeof(struct sensor_msg), 160, 4);
+K_MSGQ_DEFINE(sensor_queue, sizeof(struct sensor_msg), 256, 4);
 K_MSGQ_DEFINE(config_queue, sizeof(struct sensor_config), 16, 4);
 
 K_THREAD_STACK_DEFINE(sensor_work_q_stack, CONFIG_SENSOR_WORK_QUEUE_STACK_SIZE);
@@ -100,14 +98,13 @@ void init_sensor_manager() {
 	active_sensors = 0;
 
 	k_work_queue_init(&sensor_work_q);
-
 	k_work_queue_start(&sensor_work_q, sensor_work_q_stack,
                    K_THREAD_STACK_SIZEOF(sensor_work_q_stack), K_PRIO_PREEMPT(CONFIG_SENSOR_WORK_QUEUE_PRIO),
                    NULL);
 
 	sensor_pub_id = k_thread_create(&sensor_publish, sensor_publish_thread_stack, CONFIG_SENSOR_PUB_STACK_SIZE,
 		sensor_chan_update, NULL, NULL, NULL,
-			K_PRIO_PREEMPT(CONFIG_SENSOR_PUB_THREAD_PRIO), 0, K_FOREVER);  // Thread ist initial suspendiert
+			K_PRIO_PREEMPT(CONFIG_SENSOR_PUB_THREAD_PRIO), 0, K_FOREVER);
 
 	k_work_init(&config_work, config_work_handler);
 
@@ -163,17 +160,13 @@ void stop_sensor_manager() {
 	pub_total_us = 0;
 	pub_max_us = 0;
 
-	//k_thread_suspend(sensor_pub_id);
 	k_poll_signal_reset(&sensor_manager_sig);
 
 	_state = SUSPENDED;
 
-	// End SDLogger and close current log file
 	sdlogger.end();
 	sd_sensors.clear();
 	state_indicator.set_sd_state(SD_IDLE);
-
-	//k_msgq_purge(&config_queue);
 }
 
 EdgeMlSensor * get_sensor(enum sensor_id id) {

@@ -16,6 +16,8 @@ MAXM86161 PPG::ppg(&I2C2);
 
 static struct sensor_msg msg_ppg;
 static uint32_t ppg_queue_full_count;
+static uint32_t ppg_calls, ppg_max_us;
+static uint64_t ppg_total_us;
 
 const SampleRateSetting<16> PPG::sample_rates = {
     { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x0A, 0x0B,
@@ -68,15 +70,18 @@ bool PPG::init(struct k_msgq * queue) {
 
 void PPG::update_sensor(struct k_work *work) {
     if (!sensor._running) return;
+    uint64_t t0 = micros();
     int int_status;
     int status;
 
-    uint64_t _time_stamp = micros();
-
-    PPG::sensor._sample_count += (_time_stamp - PPG::sensor._last_time_stamp) / PPG::sensor.t_sample_us;
-    PPG::sensor._last_time_stamp = _time_stamp;
+    PPG::sensor._sample_count += (t0 - PPG::sensor._last_time_stamp) / PPG::sensor.t_sample_us;
+    PPG::sensor._last_time_stamp = t0;
 
     if (PPG::sensor._sample_count < PPG::sensor._num_samples_buffered * (1.f - CONFIG_SENSOR_CLOCK_ACCURACY / 100.f)) {
+        uint32_t elapsed = (uint32_t)(micros() - t0);
+        ppg_calls++;
+        ppg_total_us += elapsed;
+        if (elapsed > ppg_max_us) ppg_max_us = elapsed;
         return;
     }
     
@@ -106,7 +111,7 @@ void PPG::update_sensor(struct k_work *work) {
             msg_ppg.data.size = to_write * _size + sizeof(uint16_t);
 
             const uint64_t dt_us = (uint64_t)((double)(num_samples - written) * (double)PPG::sensor.t_sample_us);
-            msg_ppg.data.time = _time_stamp - dt_us;
+            msg_ppg.data.time = t0 - dt_us;
 
             if (to_write > 1) {
                 uint16_t t_diff = PPG::sensor.t_sample_us;
@@ -126,6 +131,11 @@ void PPG::update_sensor(struct k_work *work) {
             written += to_write;
         }
     }
+
+    uint32_t elapsed = (uint32_t)(micros() - t0);
+    ppg_calls++;
+    ppg_total_us += elapsed;
+    if (elapsed > ppg_max_us) ppg_max_us = elapsed;
 }
 
 /**
@@ -160,10 +170,10 @@ void PPG::stop() {
 
     _running = false;
 
-    if (ppg_queue_full_count > 0) {
-        LOG_WRN("ppg queue full drops: %u", ppg_queue_full_count);
-        ppg_queue_full_count = 0;
-    }
+    uint32_t avg = ppg_calls ? (uint32_t)(ppg_total_us / ppg_calls) : 0;
+    LOG_INF("ppg: calls=%u avg=%u us max=%u us total=%u ms queue_drops=%u",
+            ppg_calls, avg, ppg_max_us, (uint32_t)(ppg_total_us / 1000), ppg_queue_full_count);
+    ppg_calls = 0; ppg_total_us = 0; ppg_max_us = 0; ppg_queue_full_count = 0;
 
 	k_timer_stop(&sensor.sensor_timer);
 	k_work_cancel(&sensor.sensor_work);

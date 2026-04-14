@@ -27,7 +27,6 @@
 
 #pragma once
 
-//#include <Wire.h>
 #include <TWIM.h>
 
 //The default I2C address for the MLX90632 on the SparkX breakout is 0x3B. 0x3A is also possible.

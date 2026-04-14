@@ -58,10 +58,6 @@ bool BoneConduction::init(struct k_msgq * queue) {
 	return true;
 }
 
-void BoneConduction::reset() {
-    // Reset pulse oximeter state
-}
-
 void BoneConduction::update_sensor(struct k_work *work) {
     if (!sensor._running) return;
     uint64_t t0 = micros();

@@ -543,7 +543,6 @@ static void write_sirk(uint32_t sirk) {
 	else LOG_ERR("UICR writing error: %i", ret);
 }
 
-// Callback-Funktion für gefundene Geräte
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type, struct net_buf_simple *ad)
 {
     bool is_le_audio_device = false;
@@ -553,7 +552,7 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type, st
     while (ad->len > 0) {
         uint8_t len = net_buf_simple_pull_u8(ad);
         if (len == 0 || len > ad->len) {
-            break; // Ungültige Länge
+            break;
         }
 
         uint8_t type = net_buf_simple_pull_u8(ad);

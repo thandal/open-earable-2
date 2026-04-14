@@ -13,6 +13,8 @@ Temp Temp::sensor;
 MLX90632 Temp::temp;
 
 static struct sensor_msg msg_temp;
+static uint32_t temp_calls, temp_max_us;
+static uint64_t temp_total_us;
 
 const SampleRateSetting<8> Temp::sample_rates = {
     { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07 },  // reg_vals
@@ -43,14 +45,19 @@ bool Temp::init(struct k_msgq * queue) {
 	k_work_init(&sensor.sensor_work, update_sensor);
 	k_timer_init(&sensor.sensor_timer, sensor_timer_handler, NULL);
 
-    _active = true;
-
 	return true;
 }
 
 void Temp::update_sensor(struct k_work *work) {
     if (!sensor._running) return;
-    if (!temp.dataAvailable()) return;
+    uint64_t t0 = micros();
+    if (!temp.dataAvailable()) {
+        uint32_t elapsed = (uint32_t)(micros() - t0);
+        temp_calls++;
+        temp_total_us += elapsed;
+        if (elapsed > temp_max_us) temp_max_us = elapsed;
+        return;
+    }
 
     MLX90632::status returnError;
     float temperature = temp.getObjectTemp(returnError);
@@ -73,6 +80,11 @@ void Temp::update_sensor(struct k_work *work) {
     if (ret) {
         LOG_WRN("sensor msg queue full");
     }
+
+    uint32_t elapsed = (uint32_t)(micros() - t0);
+    temp_calls++;
+    temp_total_us += elapsed;
+    if (elapsed > temp_max_us) temp_max_us = elapsed;
 }
 
 /**
@@ -100,6 +112,11 @@ void Temp::stop() {
     _active = false;
 
     _running = false;
+
+    uint32_t avg = temp_calls ? (uint32_t)(temp_total_us / temp_calls) : 0;
+    LOG_INF("temp: calls=%u avg=%u us max=%u us total=%u ms",
+            temp_calls, avg, temp_max_us, (uint32_t)(temp_total_us / 1000));
+    temp_calls = 0; temp_total_us = 0; temp_max_us = 0;
 
 	k_timer_stop(&sensor.sensor_timer);
 	k_work_cancel(&sensor.sensor_work);

@@ -18,23 +18,11 @@ constexpr size_t BUFFER_SIZE = SD_BLOCK_SIZE * BUFFER_BLOCK_COUNT;
 // and will not work correctly otherwise.
 static_assert(BUFFER_SIZE % SD_BLOCK_SIZE == 0, "BUFFER_SIZE must be a multiple of SD_BLOCK_SIZE");
 
-// Forward declare the work handler
-//static void sd_work_handler(struct k_work* work);
-
-// Singleton pattern
 class SDLogger {
-protected:
-        // Add static instance pointer for work handler
-        //static SDLogger* instance_ptr;
-        //friend void sd_work_handler(struct k_work* work);
-        
 private:
-
         SDCardManager* sd_card = nullptr;
         bool is_open = false;
 
-        //uint8_t buffer[BUFFER_SIZE];  // Ring Buffer Speicher
-        //size_t buffer_pos = 0;
         std::string current_file;
 
         int write_header(); //Write file header with version and timestamp
@@ -51,7 +39,6 @@ private:
 
         struct sensor_data msg;
 
-        //struct sensor_data* const data_buf = &(msg.data);
         static void sensor_sd_task();
 
         friend void sd_listener_callback(const struct zbus_channel *chan);

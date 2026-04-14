@@ -181,8 +181,7 @@ extern struct k_msgq encoder_queue;
 // Definition eines zbus-Kanals
 ZBUS_CHAN_DEFINE(audio_channel, struct audio_data, NULL, NULL, ZBUS_OBSERVERS_EMPTY, ZBUS_MSG_INIT(0));
 
-// Thread-Stack und Daten
-K_THREAD_STACK_DEFINE(data_thread_stack, CONFIG_ENCODER_STACK_SIZE); //CONFIG_DATA_THREAD_STACK_SIZE
+K_THREAD_STACK_DEFINE(data_thread_stack, CONFIG_ENCODER_STACK_SIZE);
 static struct k_thread data_thread_data;
 static k_tid_t data_thread_id;
 
@@ -193,21 +192,16 @@ int _count = 0;
 extern struct k_poll_signal encoder_sig;
 extern struct k_poll_event logger_sig;
 
-// Funktion für den neuen Thread
 static void data_thread(void *arg1, void *arg2, void *arg3)
 {
-    //struct audio_data audio_item;
     void *tmp_pcm_raw_data[CONFIG_FIFO_FRAME_SPLIT_NUM];
-    //char pcm_raw_data[FRAME_SIZE_BYTES];
     size_t pcm_block_size;
     int ret;
 
 	struct audio_rx_data audio_item;
-	//memcpy(audio_item.data, pcm_raw_data, FRAME_SIZE_BYTES);
 	audio_item.size = FRAME_SIZE_BYTES;
 
     while (1) {
-        // Daten aus der data_queue lesen
         for (int i = 0; i < CONFIG_FIFO_FRAME_SPLIT_NUM; i++) {
 			// wait for next sample block to be available
             ret = data_fifo_pointer_last_filled_get(ctrl_blk.in.fifo, &tmp_pcm_raw_data[i], &pcm_block_size, K_FOREVER);
@@ -281,7 +275,6 @@ void record_to_sd(bool active) {
 	_record_to_sd = active;
 }
 
-// Funktion, um den neuen Thread zu starten
 void start_data_thread(void)
 {
 	if (data_thread_id == NULL) {

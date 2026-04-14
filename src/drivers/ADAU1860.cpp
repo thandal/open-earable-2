@@ -526,7 +526,7 @@ bool ADAU1860::readReg(uint32_t reg, uint8_t * buffer, uint16_t len) {
 
         _i2c->aquire();
 
-        // Adresse senden und Daten lesen
+        // Send address and read data
         ret = i2c_transfer(_i2c->master, msg, 2, address);
         if (ret) {
                 LOG_WRN("I2C read failed: %d", ret);

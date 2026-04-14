@@ -49,14 +49,7 @@ int MAXM86161::init(enum sample_rate sample_rate)
     // Set integration time and ADC range with ALC and ADD
     _write_to_reg(REG_PPG_CONFIG1, 0x0F);
 
-    // Set sample rate and averaging
-    // cmd[0] = 0x12; cmd[1] = 0x50;  // 8Hz with no averaging
-    // cmd[1] = 0x08; 50 Hz with no averaging
-    //_write_to_reg(REG_PPG_CONFIG2, 0x08);
     _write_to_reg(REG_PPG_CONFIG2, sample_rate << POS_PPG_SR);
-
-    // Set LED settling, digital filter, burst rate, burst enable
-    //  No Burst mode with default settling
     _write_to_reg(REG_PPG_CONFIG3, 0x40);
 
     // Set Photodiode bias to 0pF to 65pF
@@ -256,117 +249,6 @@ int MAXM86161::set_ppg_tint(int time)
 }
 
 /*******************************************************************************/
-// NOTE: alc_on/off and picket_on/off are currently unused and have a bug:
-// _set_one_bit/_clear_one_bit receive the register ADDRESS constant as the
-// first arg instead of existing_reg_values. This would overwrite the register
-// with the address value (e.g. 0x11), corrupting ADC range and integration
-// time settings. Fix the first arg before enabling these functions.
-#if 0
-int MAXM86161::alc_on(void)
-{
-    int existing_reg_values;
-    int status;
-
-    // Get value of register
-    _read_from_reg(REG_PPG_CONFIG1, existing_reg_values);
-
-    // Set the bit to stop the device
-    existing_reg_values = _clear_one_bit(REG_PPG_CONFIG1, POS_ALC_DIS);
-
-    // Send the Shutdown command to the device
-    status = _write_to_reg(REG_PPG_CONFIG1, existing_reg_values);
-
-    return status;
-}
-
-int MAXM86161::alc_off(void)
-{
-    int existing_reg_values;
-    int status;
-
-    // Get value of register
-    _read_from_reg(REG_PPG_CONFIG1, existing_reg_values);
-
-    // Set the bit to stop the device
-    existing_reg_values = _set_one_bit(REG_PPG_CONFIG1, POS_ALC_DIS);
-
-    // Send the Shutdown command to the device
-    status = _write_to_reg(REG_PPG_CONFIG1, existing_reg_values);
-
-    return status;
-}
-
-
-int MAXM86161::picket_off(void)
-{
-    int existing_reg_values;
-    int status;
-
-    // Get value of register
-    _read_from_reg(REG_PICKET_FENCE, existing_reg_values);
-
-    // Set the bit to stop the device
-    existing_reg_values = _clear_one_bit(REG_PICKET_FENCE, POS_PICKET_DIS);
-
-    // Send the Shutdown command to the device
-    status = _write_to_reg(REG_PICKET_FENCE, existing_reg_values);
-
-    return status;
-}
-
-int MAXM86161::picket_on(void)
-{
-    int existing_reg_values;
-    int status;
-
-    // Get value of register
-    _read_from_reg(REG_PICKET_FENCE, existing_reg_values);
-
-    // Set the bit to stop the device
-    existing_reg_values = _set_one_bit(REG_PICKET_FENCE, POS_PICKET_DIS);
-
-    // Send the Shutdown command to the device
-    status = _write_to_reg(REG_PICKET_FENCE, existing_reg_values);
-
-    return status;
-}
-#endif
-
-int MAXM86161::new_value_read_on(void)
-{
-    int existing_reg_values;
-    int status;
-
-    // Get value of register
-    _read_from_reg(REG_IRQ_ENABLE1, existing_reg_values);
-
-    // Set the bit to stop the device
-    existing_reg_values = _set_one_bit(REG_IRQ_ENABLE1, POS_DATA_RDY_EN); 
-    
-    // Send the Shutdown command to the device
-    status = _write_to_reg(REG_IRQ_ENABLE1, existing_reg_values);
- 
-    return status;
-}
-
-int MAXM86161::new_value_read_off(void)
-{
-    int existing_reg_values;
-    int status;
-
-    // Get value of register
-    _read_from_reg(REG_IRQ_ENABLE1, existing_reg_values);
-
-    // Set the bit to stop the device
-    existing_reg_values = _clear_one_bit(REG_IRQ_ENABLE1, POS_DATA_RDY_EN); 
-    
-    // Send the Shutdown command to the device
-    status = _write_to_reg(REG_IRQ_ENABLE1, existing_reg_values);
- 
-    return status;
-}
-
-
 /*******************************************************************************/
 // Function to read from a registry
 int MAXM86161::_read_from_reg(int address, int &data) {
@@ -384,8 +266,6 @@ int MAXM86161::_read_from_reg(int address, int &data) {
     return ret; //Fail
 }
 
-// Function to write to a registry
-// TODO Check about mfio -> might not need it.
 int MAXM86161::_write_to_reg(int address, int value) {
 
     _i2c->aquire();
@@ -442,8 +322,9 @@ int MAXM86161::_clear_interrupt(void)
 
 int MAXM86161::read_interrupt_state(int &value)
 {
-    int status;
-    status = _read_from_reg(REG_IRQ_STATUS2, value);
+    int status, unused;
+    // Status2 must be read first to latch Status1 (per datasheet)
+    status = _read_from_reg(REG_IRQ_STATUS2, unused);
     status = _read_from_reg(REG_IRQ_STATUS1, value);
     return status;
 }

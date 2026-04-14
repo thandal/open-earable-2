@@ -32,8 +32,6 @@
  *
  */
 #include <stdint.h>
-// #include <stdlib.h>
-// #include <stdio.h>
 
 #include "bma5.h"
 #include "BMA580_Sensor.h"
@@ -306,9 +304,6 @@ int BMA580::init(int odr, int fifo_watermark_level) {
     rslt = bma5_get_fifo_conf(&fifo_conf, &dev);
     bma5_check_rslt("bma5_get_fifo_conf", rslt);
 
-    rslt = bma5_get_fifo_conf(&fifo_conf, &dev);
-    bma5_check_rslt("bma5_get_fifo_conf", rslt);
-
     fifo_conf.fifo_cfg = BMA5_FIFO_CFG_ENABLE;
     fifo_conf.fifo_acc_x = BMA5_FIFO_ACC_X_ENABLE;
     fifo_conf.fifo_acc_y = BMA5_FIFO_ACC_Y_ENABLE;
@@ -316,7 +311,7 @@ int BMA580::init(int odr, int fifo_watermark_level) {
     fifo_conf.fifo_compression = BMA5_FIFO_COMPRESSION_ACC_16BIT;
     fifo_conf.fifo_sensor_time = BMA5_FIFO_SENSOR_TIME_OFF;
     fifo_conf.fifo_size = BMA5_FIFO_SIZE_MAX_1024_BYTES;
-    fifo_conf.fifo_stop_on_full = BMA5_ENABLE;
+    fifo_conf.fifo_stop_on_full = BMA5_DISABLE;
 
     rslt = get_fifo_conf(&fifo_conf, &dev);
     bma5_check_rslt("get_fifo_conf", rslt);

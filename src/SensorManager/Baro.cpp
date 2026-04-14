@@ -10,6 +10,8 @@
 LOG_MODULE_DECLARE(BMP388);
 
 static struct sensor_msg msg_baro;
+static uint32_t baro_calls, baro_max_us;
+static uint64_t baro_total_us;
 
 Adafruit_BMP3XX Baro::bmp;
 
@@ -17,7 +19,6 @@ Baro Baro::sensor;
 
 static int baro_initial_discard = 1;
 
-// Initialisierung der SampleRateSettings für Baro (BMP3)
 const SampleRateSetting<18> Baro::sample_rates = {
     { BMP3_ODR_0_001_HZ, BMP3_ODR_0_003_HZ, BMP3_ODR_0_006_HZ, BMP3_ODR_0_01_HZ, 
       BMP3_ODR_0_02_HZ, BMP3_ODR_0_05_HZ, BMP3_ODR_0_1_HZ, BMP3_ODR_0_2_HZ, 
@@ -36,6 +37,7 @@ const SampleRateSetting<18> Baro::sample_rates = {
 
 void Baro::update_sensor(struct k_work *work) {
 	if (!sensor._running) return;
+	uint64_t t0 = micros();
 
 	int ret;
 
@@ -64,6 +66,11 @@ void Baro::update_sensor(struct k_work *work) {
 	if (ret) {
 		LOG_WRN("sensor msg queue full");
 	}
+
+	uint32_t elapsed = (uint32_t)(micros() - t0);
+	baro_calls++;
+	baro_total_us += elapsed;
+	if (elapsed > baro_max_us) baro_max_us = elapsed;
 }
 
 /**
@@ -99,9 +106,6 @@ void Baro::start(int sample_rate_idx) {
 	baro_initial_discard = 1;
 
     k_timeout_t t = K_USEC(1e6 / sample_rates.true_sample_rates[sample_rate_idx]);
-    
-    //bmp.set_interrogation_rate(setting.reg_val);
-    //bmp.start();
 
 	k_timer_start(&sensor.sensor_timer, K_NO_WAIT, t);
 
@@ -113,6 +117,11 @@ void Baro::stop() {
     _active = false;
 
 	_running = false;
+
+	uint32_t avg = baro_calls ? (uint32_t)(baro_total_us / baro_calls) : 0;
+	LOG_INF("baro: calls=%u avg=%u us max=%u us total=%u ms",
+	        baro_calls, avg, baro_max_us, (uint32_t)(baro_total_us / 1000));
+	baro_calls = 0; baro_total_us = 0; baro_max_us = 0;
 
 	k_timer_stop(&sensor.sensor_timer);
 	k_work_cancel(&sensor.sensor_work);

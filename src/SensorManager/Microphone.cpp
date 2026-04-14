@@ -11,8 +11,6 @@
 
 #include "ADAU1860.h"
 
-//#include <data_fifo.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,7 +24,6 @@ extern void empty_fifo();
 #endif
 
 #include <zephyr/logging/log.h>
-//LOG_MODULE_DECLARE(BMX160);
 LOG_MODULE_REGISTER(microphone, CONFIG_LOG_DEFAULT_LEVEL);
 
 extern struct data_fifo fifo_rx;

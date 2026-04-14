@@ -60,7 +60,7 @@ config SENSOR_SD_SUB_QUEUE_SIZE
 
 config SENSOR_GATT_SUB_QUEUE_SIZE
 	int "Queue size for GATT notification sensor subscriber"
-	default 256
+	default 64
 
 endmenu # Zbus
 
@@ -84,5 +84,26 @@ config SENSOR_LATENCY_MS
 	  that buffer data before asserting an interrupt.
 
 endmenu # Buffer management
+
+#-----------------------------------------------------------------------------#
+menu "IMU (BMX160)"
+
+config IMU_ENABLE_MAGNETOMETER
+	bool "Enable the BMX160 internal magnetometer (BMM150)"
+	default n
+	help
+	  When enabled, the internal BMM150 magnetometer is powered on via
+	  CMD_REG = AUX_NORMAL_MODE, configured for 100 Hz data mode, and
+	  read once per FIFO drain to populate the mag fields in the IMU
+	  sample.
+
+	  When disabled, the magnetometer subsystem is kept in suspend
+	  (~170 uA saved), the aux config sequence is skipped, and the
+	  mag fields in each IMU message are zero-filled. The earpiece
+	  speaker magnet dominates the local field so absolute mag readings
+	  are near-useless; the legacy driver also applied an ~8x scale
+	  inflation, so leaving this disabled is usually the right choice.
+
+endmenu # IMU
 
 endmenu # Modules

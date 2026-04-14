@@ -36,7 +36,7 @@ static k_tid_t thread_id;
 struct ring_buf ring_buffer;
 struct k_mutex ring_mutex;   // Protects ring_buffer operations
 struct k_mutex file_mutex;   // Protects sd_card open/write/close
-uint8_t buffer[BUFFER_SIZE];  // Ring Buffer Speicher
+uint8_t buffer[BUFFER_SIZE];
 
 // Coordination flags (atomic because they are accessed from multiple threads)
 static atomic_t g_stop_writing;   // 1 while end()/flush/close is in progress
@@ -209,8 +209,6 @@ int SDLogger::init() {
 
     atomic_clear(&g_stop_writing);
     atomic_clear(&g_sd_removed);
-
-    //set_ring_buffer(&ring_buffer);
 
     k_poll_signal_init(&logger_sig);
 
