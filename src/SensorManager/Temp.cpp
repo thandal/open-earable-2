@@ -92,7 +92,10 @@ void Temp::sensor_timer_handler(struct k_timer *dummy) {
 void Temp::start(int sample_rate_idx) {
     if (!_active) return;
 
-    k_timeout_t t = K_USEC(1e6 / sample_rates.true_sample_rates[sample_rate_idx]);
+    // Poll at 2x the sensor rate to avoid missing data-ready windows
+    // due to clock drift between the MCU timer and the MLX90632's
+    // internal oscillator.
+    k_timeout_t t = K_USEC(1e6 / sample_rates.true_sample_rates[sample_rate_idx] / 2);
 
     temp.setSampleRateRegVal(sample_rates.reg_vals[sample_rate_idx]);
     temp.continuousMode();
