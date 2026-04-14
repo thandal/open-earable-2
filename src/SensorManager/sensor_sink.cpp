@@ -18,3 +18,9 @@ extern "C" int sensor_sink_put(const struct sensor_msg *msg)
 
     return ret;
 }
+
+extern "C" int sensor_sink_write_sd(const void *const *data_blocks,
+                                    const size_t *lengths, size_t block_count)
+{
+    return sdlogger.write_sensor_data(data_blocks, lengths, block_count);
+}

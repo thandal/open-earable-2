@@ -27,7 +27,7 @@
 #include "sd_card_playback.h"
 
 #include "Equalizer.h"
-#include "sdlogger_wrapper.h"
+#include "sensor_sink.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(audio_datapath, CONFIG_AUDIO_DATAPATH_LOG_LEVEL);
@@ -234,10 +234,7 @@ static void data_thread(void *arg1, void *arg2, void *arg3)
 					audio_item.data + (i * BLOCK_SIZE_BYTES)
 				};
 
-				sdlogger_write_data(data_ptrs, data_size, 2);
-
-				//sdlogger_write_data(&audio_msg.data, data_size);
-				//sdlogger_write_data(audio_item.data + (i * BLOCK_SIZE_BYTES), BLOCK_SIZE_BYTES);
+				sensor_sink_write_sd(data_ptrs, data_size, 2);
 			}
 
 			k_yield();
