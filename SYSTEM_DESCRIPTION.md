@@ -68,6 +68,20 @@ Built with `west build` (Zephyr's meta-tool). Flash scripts in `tools/flash/` su
 | I2C2 | i2c@b000 | Audio | 400 kHz | Pulse Oximeter/PPG MAXM86161 (0x62), ADAU1860 (0x64) |
 | I2C3 | i2c@c000 | Sensors | 1 MHz (FM+) | Bone Conductor BMA580 (0x18), IMU BMX160 (0x68), Barometer BMP388 (0x76), Optical Temp MLX90632 (0x3A) |
 
+## Pullups/Pulldowns
+
+NRF5340 Internal Pullups:
+- ON
+- OFF
+- CC_#PG
+- INT
+- GPOUT
+- SD_STATE
+
+NRF5340 Internal Pulldowns:
+- LSCTRL
+- ON+BTN
+
 ## Optimization Opportunities (from datasheet review)
 
 - **BMP388:** Running with no oversampling and no IIR filter. The datasheet recommends at least x4 pressure oversampling + IIR coeff 3 for indoor navigation (5 cm altitude noise vs 55 cm with current defaults). See BMP388 datasheet Table "Recommended Filter Settings."
