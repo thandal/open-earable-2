@@ -173,7 +173,6 @@ int BMX160::init(uint8_t accel_odr_reg, uint8_t gyro_odr_reg,
         LOG_ERR("bmi160_init failed: %d (chip_id=0x%02X)", rslt, dev.chip_id);
         return rslt;
     }
-    LOG_INF("BMX160 chip_id=0x%02X", dev.chip_id);
 
     dev.accel_cfg.odr   = accel_odr_reg;
     dev.accel_cfg.range = BMI160_ACCEL_RANGE_2G;

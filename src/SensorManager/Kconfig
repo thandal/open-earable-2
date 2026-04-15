@@ -18,10 +18,12 @@ config SENSOR_GATT_NOTIFY_THREAD_PRIO
 
 config SENSOR_SD_THREAD_PRIO
     int "Priority for SD card sensor logging thread"
-	default 3
+	default 5
 	help
 	  This preemptible thread drains the ring buffer and writes
-	  sensor data in bulk to the SD card.
+	  sensor data in bulk to the SD card. Same priority as the sensor
+	  work queue so the SPI busy-wait yields to sensor reads via
+	  k_msleep(0).
 endmenu # Thread priorities
 
 #----------------------------------------------------------------------------#
