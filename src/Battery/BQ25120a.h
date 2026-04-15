@@ -5,7 +5,6 @@
 #include <zephyr/drivers/gpio.h>
 
 #include <math.h>
-//#include <Wire.h>
 #include <TWIM.h>
 
 #include "openearable_common.h"
@@ -45,6 +44,35 @@ public:
         ILIM_UVLO = 0x09
     };
 
+    enum class ChargePhase : uint8_t {
+        Discharge = 0,
+        Charging = 1,
+        Done = 2,
+        Fault = 3,
+    };
+
+    // Register 0x01 (Faults) bit layout per BQ25120A datasheet Table 13.
+    struct FaultBit { uint8_t mask; const char *name; };
+    static constexpr FaultBit fault_bits[] = {
+        { 1 << 4, "BAT_OCP: battery over-current (cleared on read)" },
+        { 1 << 5, "BAT_UVLO: battery under-voltage lockout (persistent)" },
+        { 1 << 6, "VIN_UV: input under-voltage (cleared on read)" },
+        { 1 << 7, "VIN_OV: input over-voltage (persistent)" },
+    };
+
+    // RAII guard: brackets any I2C access with exit/enter high-impedance.
+    // Refcounted so nested scopes compose; mutex serialises concurrent
+    // thread/work-handler entries so the 0↔1 transition is atomic.
+    class ActiveScope {
+    public:
+        explicit ActiveScope(BQ25120a &c);
+        ~ActiveScope();
+        ActiveScope(const ActiveScope&) = delete;
+        ActiveScope& operator=(const ActiveScope&) = delete;
+    private:
+        BQ25120a &c_;
+    };
+
     BQ25120a(TWIM * i2c);
 
     int begin();
@@ -63,6 +91,7 @@ public:
     void enable_charge();
     
     uint8_t read_charging_state();
+    ChargePhase read_charge_phase();
     uint8_t read_fault();
     uint8_t read_ts_fault();
     chrg_state read_charging_control();
@@ -92,6 +121,9 @@ private:
     uint64_t last_i2c;
     uint64_t last_high_z;
 
+    struct k_mutex active_mutex;
+    uint32_t active_count = 0;
+
     TWIM *_i2c;
 
     gpio_callback power_connect_cb_data;
@@ -100,10 +132,6 @@ private:
     const struct gpio_dt_spec pg_pin = GPIO_DT_SPEC_GET(DT_NODELABEL(bq25120a), pg_gpios);
     const struct gpio_dt_spec cd_pin = GPIO_DT_SPEC_GET(DT_NODELABEL(bq25120a), cd_gpios);
     const struct gpio_dt_spec int_pin = GPIO_DT_SPEC_GET(DT_NODELABEL(bq25120a), int_gpios);
-
-    /*const struct gpio_dt_spec pg_pin = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(bq25120a), pg_gpios, {0});
-    const struct gpio_dt_spec cd_pin = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(bq25120a), cd_gpios, {0});
-    const struct gpio_dt_spec int_pin = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(bq25120a), int_gpios, {0});*/
 };
 
 extern BQ25120a battery_controller;

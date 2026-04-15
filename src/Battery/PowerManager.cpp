@@ -63,7 +63,7 @@ void PowerManager::power_good_callback(const struct device *dev, struct gpio_cal
     k_work_submit(&fuel_gauge_work);
 
     if (power_good) {
-        power_manager.last_charging_state = 0;
+        power_manager.charger_init_pending = true;
         k_work_schedule(&charge_ctrl_delayable, K_NO_WAIT);
     } else {
         k_work_cancel_delayable(&charge_ctrl_delayable);
@@ -84,17 +84,66 @@ void PowerManager::charge_ctrl_work_handler(struct k_work * work) {
 void PowerManager::battery_controller_work_handler(struct k_work * work) {
     button_state state;
 
-    //uint8_t val = gpio_pin_get_dt(&power_manager.error_led);
-    //gpio_pin_set_dt(&power_manager.error_led, 1 - val);
-
-    battery_controller.exit_high_impedance();
-    state = battery_controller.read_button_state();
-    battery_controller.enter_high_impedance();
+    {
+        BQ25120a::ActiveScope active(battery_controller);
+        state = battery_controller.read_button_state();
+    }
 
     if (state.wake_2) {
         power_manager.power_on = !power_manager.power_on;
         if (!power_manager.power_on) power_manager.power_down();
     }
+}
+
+struct charging_snapshot {
+    BQ25120a::ChargePhase phase;
+    bat_status bat;
+    gauge_status gs;
+    uint8_t fault;
+    float voltage_v;
+    float current_ma;
+    float target_current_ma;
+    bool power_connected;
+};
+
+// Pure classifier: hardware snapshot + config → application-level charging_state.
+// No I2C, no logging, no side effects. Unit-testable by construction.
+static enum charging_state classify_charging(const charging_snapshot &s,
+                                             const battery_settings &cfg) {
+    switch (s.phase) {
+        case BQ25120a::ChargePhase::Discharge:
+            if (s.gs.edv1) return BATTERY_CRITICAL;
+#ifdef CONFIG_BATTERY_ENABLE_LOW_STATE
+            if (s.gs.edv2) return BATTERY_LOW;
+#endif
+            return DISCHARGING;
+
+        case BQ25120a::ChargePhase::Charging:
+            if (s.bat.SYSDWN) return PRECHARGING;
+            if (s.current_ma > 0.8f * s.target_current_ma - 2.0f * cfg.i_term) {
+                return CHARGING;
+            }
+            if (s.voltage_v > cfg.u_term - 0.02f) {
+#ifdef CONFIG_BATTERY_ENABLE_TRICKLE_CHARGE
+                return TRICKLE_CHARGING;
+#else
+                return CHARGING;
+#endif
+            }
+            return POWER_CONNECTED;
+
+        case BQ25120a::ChargePhase::Done:
+            return FULLY_CHARGED;
+
+        case BQ25120a::ChargePhase::Fault:
+            // Undervoltage fault with power connected + current flowing = recovery.
+            if ((s.fault & (1 << 5)) && s.power_connected &&
+                s.current_ma > 0.5f * cfg.i_term) {
+                return PRECHARGING;
+            }
+            return FAULT;
+    }
+    return DISCHARGING;
 }
 
 void PowerManager::fuel_gauge_work_handler(struct k_work * work) {
@@ -103,140 +152,78 @@ void PowerManager::fuel_gauge_work_handler(struct k_work * work) {
 
     msg.battery_level = fuel_gauge.state_of_charge();
 
-    bat_status bat = fuel_gauge.battery_status();
-
     power_manager.get_battery_status(status);
 
-    if (power_manager.power_on && bat.SYSDWN) {
+    charging_snapshot snap;
+    snap.bat = fuel_gauge.battery_status();
+    snap.gs = fuel_gauge.gauging_state();
+    snap.voltage_v = fuel_gauge.voltage();
+    snap.current_ma = fuel_gauge.current();
+    snap.target_current_ma = fuel_gauge.charge_current();
+
+    if (power_manager.power_on && snap.bat.SYSDWN) {
         LOG_WRN("Battery reached system down voltage.");
         k_work_reschedule(&power_manager.power_down_work, K_NO_WAIT);
     }
 
-    if (bat.CHGINH) {
+    if (snap.bat.CHGINH) {
         power_manager.charging_disabled = true;
         battery_controller.disable_charge();
     } else if (power_manager.charging_disabled) {
         battery_controller.enable_charge();
     }
 
-    float current;
-    float target_current;
-    float voltage;
+    uint8_t ts_fault = 0;
+    {
+        BQ25120a::ActiveScope active(battery_controller);
+        snap.phase = battery_controller.read_charge_phase();
+        snap.power_connected = battery_controller.power_connected();
+        if (snap.phase == BQ25120a::ChargePhase::Fault) {
+            snap.fault = battery_controller.read_fault();
+            ts_fault = battery_controller.read_ts_fault();
+        } else {
+            snap.fault = 0;
+        }
+    }
 
-    battery_controller.exit_high_impedance();
+    msg.charging_state = classify_charging(snap, power_manager._battery_settings);
 
-    uint16_t charging_state = battery_controller.read_charging_state() >> 6;
-    gauge_status gs;
-
-    switch (charging_state) {
-        case 0:
+    switch (snap.phase) {
+        case BQ25120a::ChargePhase::Discharge:
             LOG_INF("charging state: discharge");
-            msg.charging_state = DISCHARGING;
-
-            gs = fuel_gauge.gauging_state();
-
-            if (gs.edv2) {
-                #ifdef CONFIG_BATTERY_ENABLE_LOW_STATE
-                msg.charging_state = BATTERY_LOW;
-                #endif
-            }
-            if (gs.edv1) {
-                msg.charging_state = BATTERY_CRITICAL;
-            }
             break;
-        case 1:
+        case BQ25120a::ChargePhase::Charging:
             LOG_INF("charging state: charging");
-
-            if (bat.SYSDWN) {
-                msg.charging_state = PRECHARGING;
-                break;
-            }
-
-            current = fuel_gauge.current();
-            target_current = fuel_gauge.charge_current();
-            voltage = fuel_gauge.voltage();
-
-            msg.charging_state = POWER_CONNECTED;
-
-            LOG_DBG("Voltage: %.3f V", voltage);
-            LOG_DBG("Charging current: %.3f mA", current);
-            LOG_DBG("Target current: %.3f mA", target_current);
+            LOG_DBG("Voltage: %.3f V", snap.voltage_v);
+            LOG_DBG("Charging current: %.3f mA", snap.current_ma);
+            LOG_DBG("Target current: %.3f mA", snap.target_current_ma);
             LOG_DBG("State of charge: %.3f %%", fuel_gauge.state_of_charge());
-
-            // check if target current is met (if not tapering)
-            if (current > 0.8 * target_current - 2 * power_manager._battery_settings.i_term) {
-                msg.charging_state = CHARGING;
-            } 
-            else if (voltage > power_manager._battery_settings.u_term - 0.02) {
-                #ifdef CONFIG_BATTERY_ENABLE_TRICKLE_CHARGE
-                msg.charging_state = TRICKLE_CHARGING;
-                #else
-                msg.charging_state = CHARGING;
-                #endif
-            }
-            
             break;
-        case 2:
+        case BQ25120a::ChargePhase::Done:
             LOG_INF("charging state: done");
-            msg.charging_state = FULLY_CHARGED;
             break;
-        case 3:
+        case BQ25120a::ChargePhase::Fault:
             LOG_WRN("charging state: fault");
-            msg.charging_state = FAULT;
-
-            uint8_t fault = battery_controller.read_fault();
-            // Battery fuel gauge status
-            bat_status status = fuel_gauge.battery_status();
-            voltage = fuel_gauge.voltage();
-            current = fuel_gauge.current();
-
-            // cleared after read
-            if (fault & (1 << 4)) {
-                LOG_WRN("Input over voltage.");
+            for (const auto &b : BQ25120a::fault_bits) {
+                if (snap.fault & b.mask) LOG_WRN("%s", b.name);
             }
-
-            // as long as fault exists
-            if (fault & (1 << 5)) {
-                bool power_connected = battery_controller.power_connected();
-                if (power_connected && current > 0.5 * power_manager._battery_settings.i_term) {
-                    msg.charging_state = PRECHARGING;
-                }
-                LOG_WRN("Battery under voltage: %.3f V", voltage);
+            if (snap.fault & (1 << 5)) {
+                LOG_WRN("Battery voltage at under-voltage fault: %.3f V", snap.voltage_v);
             }
-
-            // cleared after read
-            if (fault & (1 << 6)) {
-                LOG_WRN("Input under voltage");
-            }
-
-            // as long as fault exists
-            if (fault & (1 << 7)) {
-                LOG_WRN("Battery over voltage");
-            }
-
-            uint8_t ts_fault = battery_controller.read_ts_fault();
-
             if ((ts_fault >> 5) & 0x7) {
                 LOG_WRN("TS_ENABLED: %i, TS FAULT: %i", ts_fault >> 7, (ts_fault >> 5) & 0x3);
-                battery_controller.setup(power_manager._battery_settings);
+                power_manager.setup_pmic();
             }
-
             LOG_DBG("------------------ Battery Info ------------------");
             LOG_DBG("Battery Status:");
-            LOG_DBG("  Present: %d, Full Charge: %d, Full Discharge: %d", 
-                    status.BATTPRES, status.FC, status.FD);
-
-            // Basic measurements
+            LOG_DBG("  Present: %d, Full Charge: %d, Full Discharge: %d",
+                    snap.bat.BATTPRES, snap.bat.FC, snap.bat.FD);
             LOG_DBG("Basic Measurements:");
-            LOG_DBG("  Voltage: %.3f V", voltage);
-            LOG_DBG("  Current: %.3f mA", current);
+            LOG_DBG("  Voltage: %.3f V", snap.voltage_v);
+            LOG_DBG("  Current: %.3f mA", snap.current_ma);
             break;
     }
 
-    battery_controller.enter_high_impedance();
-
-    power_manager.last_charging_msg_state = msg.charging_state;
-    
     // Adjust interval based on state
     if (msg.charging_state == FAULT || msg.charging_state == POWER_CONNECTED) {
         power_manager.chrg_interval = K_SECONDS(CONFIG_BATTERY_CHARGE_CONTROLLER_FAST_INTERVAL_SECONDS);
@@ -244,11 +231,10 @@ void PowerManager::fuel_gauge_work_handler(struct k_work * work) {
         power_manager.chrg_interval = K_SECONDS(CONFIG_BATTERY_CHARGE_CONTROLLER_NORMAL_INTERVAL_SECONDS);
     }
 
-	//ret = k_msgq_put(&battery_queue, &msg, K_NO_WAIT);
     ret = zbus_chan_pub(&battery_chan, &msg, K_FOREVER);
-	if (ret) {
-		LOG_WRN("power manager msg queue full");
-	}
+    if (ret) {
+        LOG_WRN("power manager msg queue full");
+    }
 }
 
 int PowerManager::begin() {
@@ -280,41 +266,27 @@ int PowerManager::begin() {
         power_on |= oe_boot_state.timer_reset;
     }
 
-    /*if (reset_reas & RESET_RESETREAS_DOG1_Msk) {
-        printk("Reset durch Watchdog-Timer\n");
-    }*/
-
     if (reset_reas & RESET_RESETREAS_SREQ_Msk) {
         LOG_INF("Rebooting ...");
         power_on = true;
     }
 
-    /*if (reset_reas & RESET_RESETREAS_LOCKUP_Msk) {
-        printk("Reset durch CPU Lockup\n");
-    }*/
-
-    battery_controller.setup(_battery_settings);
+    setup_pmic();
     battery_controller.set_int_callback(battery_controller_callback);
 
-    // check setup
     op_state state = fuel_gauge.operation_state();
     if (state.SEC != BQ27220::SEALED) {
-        //battery_controller.setup();
         fuel_gauge.setup(_battery_settings);
     }
-
-    //k_timer_init(&charge_timer, charge_timer_handler, NULL);
 
     bool battery_condition = check_battery();
 
     if (!battery_condition) LOG_WRN("Battery check failed.");
 
-    // check charging state
     bool charging = battery_controller.power_connected();
 
     if (!battery_condition) {
         power_on = false;
-        // LOG_ERR("Bad battery condition.");
         if (!charging){
             //TODO: Flash red LED once
             return power_down(false);
@@ -322,8 +294,6 @@ int PowerManager::begin() {
     }
 
     if (charging) {
-        power_manager.last_charging_state = 0;
-
         /* Enable PM runtime for load switches needed during charging.
          * ls_3_3 is claimed on demand by state_indicator. */
         int ret = pm_device_runtime_enable(ls_1_8);
@@ -356,7 +326,6 @@ int PowerManager::begin() {
         }
 
         while(!power_on && battery_controller.power_connected()) {
-            //__WFE();
             k_sleep(K_SECONDS(1));
         }
     } else {
@@ -365,12 +334,8 @@ int PowerManager::begin() {
 
     if (!power_on) return power_down();
 
-    //TODO: check power on condition
-    // either not charging and edv1 or charging and edv0 and temperature
-    
     battery_controller.set_power_connect_callback(power_good_callback);
     fuel_gauge.set_int_callback(fuel_gauge_callback);
-    //battery_controller.set_int_callback(battery_controller_callback);
 
     battery_controller.enter_high_impedance();
 
@@ -395,19 +360,16 @@ int PowerManager::begin() {
     pm_device_runtime_get(ls_sd);
 
 
-    ret = device_is_ready(error_led.port); //bool
+    ret = device_is_ready(error_led.port);
     if (!ret) {
         LOG_WRN("Error LED not ready.");
-        //return -1;
     }
 
     ret = gpio_pin_configure_dt(&error_led, GPIO_OUTPUT_INACTIVE);
     if (ret != 0) {
         LOG_INF("Failed to set Error LED as output: ERROR -%i.", ret);
-        //return ret;
     }
 
-    // check if fuel gauge has wrong value
     float capacity = fuel_gauge.capacity();
     if (abs(capacity - _battery_settings.capacity) > 1e-4) {
         fuel_gauge.setup(_battery_settings);
@@ -462,15 +424,12 @@ bool PowerManager::check_battery() {
         float temp = fuel_gauge.temperature();
         
         if (temp < _battery_settings.temp_min || temp > _battery_settings.temp_max) {
-            // set params
             battery_controller.disable_charge();
             return false;
         } else if (temp < _battery_settings.temp_fast_min || temp > _battery_settings.temp_fast_max) {
-            // set params
             battery_controller.write_charging_control(_battery_settings.i_charge / 2);
             battery_controller.enable_charge();
         } else {
-            // normal params
             battery_controller.write_charging_control(_battery_settings.i_charge);
             battery_controller.enable_charge();
         }
@@ -479,15 +438,15 @@ bool PowerManager::check_battery() {
     bat_status bs = fuel_gauge.battery_status();
     if (bs.SYSDWN) return false;
 
-    //gauge_status gs = fuel_gauge.gauging_state();
-    //if (gs.edv1) return false; // critical battery state
-
     return true;
 }
 
 void PowerManager::get_battery_status(battery_level_status &status) {
-    battery_controller.exit_high_impedance();
-    uint8_t charging_state = battery_controller.read_charging_state() >> 6;
+    BQ25120a::ChargePhase phase;
+    {
+        BQ25120a::ActiveScope active(battery_controller);
+        phase = battery_controller.read_charge_phase();
+    }
 
     status.flags = 0;
     status.power_state = 0x1; // battery_present
@@ -495,15 +454,14 @@ void PowerManager::get_battery_status(battery_level_status &status) {
     // charging state
     if (battery_controller.power_connected())  {
         status.power_state |= (0x1 << 1); // external source wired (wireless = 3-4),
-        if (charging_state == 0x1) {
+        if (phase == BQ25120a::ChargePhase::Charging) {
             status.power_state |= (0x1 << 5); // charging
             status.power_state |= (0x1 << 9); // const current
         }
-        else if (charging_state == 0x2) status.power_state |= (0x3 << 5); // inactive discharge
+        else if (phase == BQ25120a::ChargePhase::Done) status.power_state |= (0x3 << 5); // inactive discharge
     } else {
         status.power_state |= (0x2 << 5); // active discharge
     }
-    battery_controller.enter_high_impedance();
 
     // battery level
     gauge_status gs = fuel_gauge.gauging_state();
@@ -512,7 +470,6 @@ void PowerManager::get_battery_status(battery_level_status &status) {
     if (gs.edv1) status.power_state |= (0x3 << 7); // critical
     else if (gs.edv2) status.power_state |= (0x2 << 7); // low
     else status.power_state |= (0x1 << 7); // good
-	//	status.power_state |= (0x1 << 12); // fault reason
 }
 
 void PowerManager::get_energy_status(battery_energy_status &status) {
@@ -578,7 +535,6 @@ void PowerManager::reboot() {
 int PowerManager::power_down(bool fault) {
     int ret;
 
-    // disconnect devices
     uint8_t data = BT_HCI_ERR_REMOTE_USER_TERM_CONN;
     bt_conn_foreach(BT_CONN_TYPE_ALL, bt_disconnect_handler, &data);
 
@@ -586,9 +542,6 @@ int PowerManager::power_down(bool fault) {
     if (ret) {
         LOG_WRN("Failed to stop ext adv: %d", ret);
     }
-
-    // power disonnected
-    // prepare interrupts
 
     led_controller.begin();
     led_controller.power_off();
@@ -603,21 +556,11 @@ int PowerManager::power_down(bool fault) {
 
         ret = fuel_gauge.set_wakeup_int();
         if (ret != 0) return ret;
-        
-        // check battery good
-        //if (!fault) ret = power_switch.set_wakeup_int();
-        //if (ret != 0) return ret;
 
         battery_controller.enter_high_impedance();
     }
 
-    //TODO: prevent crashing with bt_disable (does not wake up)
-    /*ret = bt_disable();
-
-    if (ret != 0) {
-        NVIC_SystemReset();
-        sys_reboot(SYS_REBOOT_COLD);
-    }*/
+    // TODO: bt_disable() crashes here (doesn't wake up). See POWER_DESCRIPTION.md §3.1.
 
     if (fault) {
         LOG_WRN("Power off due to fault");
@@ -627,88 +570,43 @@ int PowerManager::power_down(bool fault) {
     LOG_PANIC();
 
     ret = bt_mgmt_stop_watchdog();
-    //ERR_CHK(ret);
 
     dac.end();
 
-    // TODO: check states of load switch (should already be suspended
-    // if all devices have been terminated correctly)
-
-    // Turn off error led
-	gpio_pin_set_dt(&error_led, 0);
+    gpio_pin_set_dt(&error_led, 0);
 
     if (charging) {
-        //NVIC_SystemReset();
         sys_reboot(SYS_REBOOT_COLD);
         return 0;
     }
 
     // Disable EN_LS_LDO in the BQ25120A so the 3.3V LDO is fully off
-    battery_controller.exit_high_impedance();
-    battery_controller.write_LS_control(false);
-    battery_controller.enter_high_impedance();
+    {
+        BQ25120a::ActiveScope active(battery_controller);
+        battery_controller.write_LS_control(false);
+    }
 
     ret = pm_device_action_run(ls_sd,  PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_3_3, PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_1_8, PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(cons, PM_DEVICE_ACTION_SUSPEND);
 
-    /*const struct device *const i2c = DEVICE_DT_GET(DT_NODELABEL(i2c1));
-    ret = pm_device_action_run(i2c, PM_DEVICE_ACTION_SUSPEND);
-    ERR_CHK(ret);*/
-
-    /*const struct device *const watch_dog = DEVICE_DT_GET(DT_CHOSEN(zephyr_bt_hci_rpmsg_ipc));
-    ret = pm_device_action_run(watch_dog, PM_DEVICE_ACTION_SUSPEND);
-    ERR_CHK(ret);*/
-
-    /*const struct device *const watch_dog = DEVICE_DT_GET(DT_ALIAS(watchdog0));
-    ret = pm_device_action_run(watch_dog, PM_DEVICE_ACTION_SUSPEND);
-    ERR_CHK(ret);*/
-
     sys_poweroff();
 
     // safety if poweroff failed
     k_msleep(1000);
-
-    //NVIC_SystemReset();
     sys_reboot(SYS_REBOOT_COLD);
 }
 
 
 void PowerManager::charge_task() {
-    uint16_t charging_state = battery_controller.read_charging_state() >> 6;
-
-    //LOG_INF("Charger Watchdog ...................");
-
-    if (last_charging_state == 0) {
+    if (charger_init_pending) {
+        charger_init_pending = false;
         LOG_INF("Setting up charge controller ........");
-        battery_controller.setup(_battery_settings);
+        setup_pmic();
         battery_controller.enable_charge();
     }
-
-    //if (last_charging_state != charging_state ||  ) {
-        k_work_submit(&fuel_gauge_work);
-        //state_inidicator.set_state()
-        /*switch (charging_state) {
-        case 0:
-            LOG_INF("charging state: ready");
-            break;
-        case 1:
-            LOG_INF("charging state: charging");
-            break;
-        case 2:
-            LOG_INF("charging state: done");
-            break;
-        case 3:
-            LOG_WRN("charging state: fault");
-
-            //battery_controller.setup(_battery_settings);
-            
-            break;
-        }*/
-    //}
-
-    last_charging_state = charging_state;
+    k_work_submit(&fuel_gauge_work);
 }
 
 int cmd_setup_fuel_gauge(const struct shell *shell, size_t argc, const char **argv) {
@@ -755,18 +653,18 @@ static int cmd_battery_info(const struct shell *shell, size_t argc, const char *
     shell_print(shell, "  Time to Empty: %ih %02dmin", (int)tte / 60, (int)tte % 60);
 
     // Battery controller status
-    battery_controller.exit_high_impedance();
-    
-    shell_print(shell, "Charging Information:");
-    uint16_t charging_state = battery_controller.read_charging_state() >> 6;
-    shell_print(shell, "  Charging State: %i", charging_state);
-    shell_print(shell, "  Power Good: %i", battery_controller.power_connected());
-    
-    struct chrg_state charge_ctrl = battery_controller.read_charging_control();
-    shell_print(shell, "  Charge Control: enabled=%i, current=%.1f mA", 
-            charge_ctrl.enabled, charge_ctrl.mAh);
+    {
+        BQ25120a::ActiveScope active(battery_controller);
 
-    battery_controller.enter_high_impedance();
+        shell_print(shell, "Charging Information:");
+        BQ25120a::ChargePhase phase = battery_controller.read_charge_phase();
+        shell_print(shell, "  Charging State: %i", static_cast<int>(phase));
+        shell_print(shell, "  Power Good: %i", battery_controller.power_connected());
+
+        struct chrg_state charge_ctrl = battery_controller.read_charging_control();
+        shell_print(shell, "  Charge Control: enabled=%i, current=%.1f mA",
+                charge_ctrl.enabled, charge_ctrl.mAh);
+    }
 
     return 0;
 }
@@ -826,35 +724,34 @@ static int cmd_sensor_diag(const struct shell *shell, size_t argc, const char **
 
     // 3. BQ25120a PMIC registers
     shell_print(shell, "\n-- BQ25120a PMIC --");
-    battery_controller.exit_high_impedance();
+    {
+        BQ25120a::ActiveScope active(battery_controller);
 
-    uint8_t charging_state = battery_controller.read_charging_state();
-    uint8_t fault = battery_controller.read_fault();
-    uint8_t ts_fault = battery_controller.read_ts_fault();
-    uint8_t ls_ldo_raw = battery_controller.read_ls_ldo_ctrl_raw();
-    float ldo_voltage = battery_controller.read_ldo_voltage();
+        uint8_t charging_state = battery_controller.read_charging_state();
+        uint8_t fault = battery_controller.read_fault();
+        uint8_t ts_fault = battery_controller.read_ts_fault();
+        uint8_t ls_ldo_raw = battery_controller.read_ls_ldo_ctrl_raw();
+        float ldo_voltage = battery_controller.read_ldo_voltage();
 
-    shell_print(shell, "  Charging state reg: 0x%02x (state=%d)", charging_state, charging_state >> 6);
-    shell_print(shell, "  Fault reg: 0x%02x", fault);
-    if (fault & (1 << 4)) shell_print(shell, "    [4] Input over-voltage (cleared on read)");
-    if (fault & (1 << 5)) shell_print(shell, "    [5] Battery under-voltage (persistent)");
-    if (fault & (1 << 6)) shell_print(shell, "    [6] Input under-voltage (cleared on read)");
-    if (fault & (1 << 7)) shell_print(shell, "    [7] Battery over-voltage (persistent)");
-    shell_print(shell, "  TS fault reg: 0x%02x", ts_fault);
-    shell_print(shell, "  LS_LDO_CTRL raw: 0x%02x", ls_ldo_raw);
-    shell_print(shell, "    EN_LS_LDO (bit7): %d", (ls_ldo_raw >> 7) & 1);
-    shell_print(shell, "    LDO voltage: %.1f V", (double)ldo_voltage);
-    shell_print(shell, "  Power Good (PG): %d", battery_controller.power_connected());
+        shell_print(shell, "  Charging state reg: 0x%02x (state=%d)", charging_state, charging_state >> 6);
+        shell_print(shell, "  Fault reg: 0x%02x", fault);
+        for (const auto &b : BQ25120a::fault_bits) {
+            if (fault & b.mask) shell_print(shell, "    %s", b.name);
+        }
+        shell_print(shell, "  TS fault reg: 0x%02x", ts_fault);
+        shell_print(shell, "  LS_LDO_CTRL raw: 0x%02x", ls_ldo_raw);
+        shell_print(shell, "    EN_LS_LDO (bit7): %d", (ls_ldo_raw >> 7) & 1);
+        shell_print(shell, "    LDO voltage: %.1f V", (double)ldo_voltage);
+        shell_print(shell, "  Power Good (PG): %d", battery_controller.power_connected());
 
-    // 3b. If LDO voltage is wrong, try to fix it and report
-    if ((ls_ldo_raw >> 7) == 0) {
-        shell_print(shell, "\n  EN_LS_LDO is OFF — re-running PMIC setup...");
-        power_manager.setup_pmic();
-        uint8_t after = battery_controller.read_ls_ldo_ctrl_raw();
-        shell_print(shell, "  After setup: LS_LDO_CTRL=0x%02x (EN=%d)", after, (after >> 7) & 1);
+        // 3b. If LDO voltage is wrong, try to fix it and report
+        if ((ls_ldo_raw >> 7) == 0) {
+            shell_print(shell, "\n  EN_LS_LDO is OFF — re-running PMIC setup...");
+            power_manager.setup_pmic();
+            uint8_t after = battery_controller.read_ls_ldo_ctrl_raw();
+            shell_print(shell, "  After setup: LS_LDO_CTRL=0x%02x (EN=%d)", after, (after >> 7) & 1);
+        }
     }
-
-    battery_controller.enter_high_impedance();
 
     // 4. I2C3 sensor probes
     shell_print(shell, "\n-- I2C3 Sensor Probes --");
@@ -900,9 +797,10 @@ static int cmd_sensor_bus_reset(const struct shell *shell, size_t argc, const ch
     //    With EN_LS_LDO=1 persisting in the PMIC, the 3.3V LDO may leak
     //    even with LSCTRL low, preventing sensors from fully de-powering.
     shell_print(shell, "Disabling EN_LS_LDO in PMIC...");
-    battery_controller.exit_high_impedance();
-    battery_controller.write_LS_control(false);
-    battery_controller.enter_high_impedance();
+    {
+        BQ25120a::ActiveScope active(battery_controller);
+        battery_controller.write_LS_control(false);
+    }
 
     // 3. Suspend I2C peripherals before GPIO takeover
     shell_print(shell, "Suspending I2C peripherals...");

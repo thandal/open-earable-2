@@ -7,8 +7,20 @@ LOG_MODULE_REGISTER(bq25120a, LOG_LEVEL_DBG);
 
 BQ25120a battery_controller(&I2C1);
 
-BQ25120a::BQ25120a(TWIM * i2c) : _i2c(i2c) { //, load_switch(LoadSwitch(GPIO_DT_SPEC_GET(DT_NODELABEL(bq25120a), lsctrl_gpios))) {
+BQ25120a::BQ25120a(TWIM * i2c) : _i2c(i2c) {
+        k_mutex_init(&active_mutex);
+}
 
+BQ25120a::ActiveScope::ActiveScope(BQ25120a &c) : c_(c) {
+        k_mutex_lock(&c_.active_mutex, K_FOREVER);
+        if (c_.active_count++ == 0) c_.exit_high_impedance();
+        k_mutex_unlock(&c_.active_mutex);
+}
+
+BQ25120a::ActiveScope::~ActiveScope() {
+        k_mutex_lock(&c_.active_mutex, K_FOREVER);
+        if (--c_.active_count == 0) c_.enter_high_impedance();
+        k_mutex_unlock(&c_.active_mutex);
 }
 
 int BQ25120a::begin() {
@@ -138,17 +150,14 @@ void BQ25120a::setup(const battery_settings &_battery_settings) {
         params.lim_mA = _battery_settings.i_max;
         params.uvlo_v = _battery_settings.u_vlo;
 
-        exit_high_impedance();
+        ActiveScope active(*this);
 
-        //reset();
         setup_ts_control();
         write_battery_voltage_control(_battery_settings.u_term);
         write_charging_control(_battery_settings.i_charge);
         write_termination_control(_battery_settings.i_term);
         write_LDO_voltage_control(3.3);
         write_uvlo_ilim(params);
-
-        enter_high_impedance();
 }
 
 uint8_t BQ25120a::read_charging_state() {
@@ -156,6 +165,10 @@ uint8_t BQ25120a::read_charging_state() {
         bool ret = readReg(registers::CTRL, (uint8_t *) &status, sizeof(status));
 
         return status;
+}
+
+BQ25120a::ChargePhase BQ25120a::read_charge_phase() {
+        return static_cast<ChargePhase>(read_charging_state() >> 6);
 }
 
 uint8_t BQ25120a::read_fault() {
@@ -320,12 +333,8 @@ chrg_state BQ25120a::read_termination_control() {
 
         struct chrg_state chrg;
 
-        // if (!ret) printk("failed to read\n");
-
         chrg.enabled = status & 0x2;
-        //chrg.high_impedance = status & 0x1;
 
-        // charger disabled
         if (!chrg.enabled) return chrg;
 
         float mAh = (status & 0x7F) >> 2;
@@ -343,9 +352,6 @@ chrg_state BQ25120a::read_termination_control() {
 
 uint8_t BQ25120a::write_termination_control(float mA, bool enable_termination) {
         uint8_t status = 0;
-
-        //bool ret = readReg(registers::TERM_CTRL, &status, sizeof(status));
-        //status &= 0x3;
 
         if (mA >= 6) {
                 if (mA > 37) mA = 37;
@@ -370,8 +376,6 @@ ilim_uvlo BQ25120a::read_uvlo_ilim() {
         uint8_t status = 0;
 
         bool ret = readReg(registers::ILIM_UVLO, (uint8_t *) &status, sizeof(status));
-
-        // if (!ret) printk("failed to read\n");
 
         param.uvlo_v = CLAMP(3.0f- 0.2f * ((status & 0x7) - 2), 2.2, 3.0);
         param.lim_mA = 50.f + 50.f * ((status >> 3) & 0x7);
@@ -437,8 +441,6 @@ button_state BQ25120a::read_button_state() {
 
         uint8_t status = 0;
         bool ret = readReg(registers::BTN_CTRL, (uint8_t *) &status, sizeof(status));
-
-        // if (!ret) printk("failed to read\n");
 
         btn.wake_1 = status & 0x2;
         btn.wake_2 = status & 0x1;

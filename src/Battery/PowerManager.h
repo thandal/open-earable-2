@@ -18,9 +18,6 @@ public:
     int begin();
 
     int power_down(bool fault = false);
-    //bool check_boot_condition();
-
-    //static LoadSwitch v1_8_switch;
 
     void reboot();
 
@@ -35,9 +32,9 @@ public:
 private:
     bool power_on = false;
     bool charging_disabled = false;
-    uint16_t last_charging_state = 0;
-
-    enum charging_state last_charging_msg_state = DISCHARGING;
+    // ISR→work handoff: the USB plug-in ISR sets this; the work handler
+    // clears it after re-running setup_pmic() (I2C can't run in ISR context).
+    bool charger_init_pending = false;
 
     void charge_task();
 
@@ -49,7 +46,6 @@ private:
 
     static k_work_delayable charge_ctrl_delayable;
 
-    //static k_work power_down_work;
     static k_work fuel_gauge_work;
     static k_work battery_controller_work;
 
