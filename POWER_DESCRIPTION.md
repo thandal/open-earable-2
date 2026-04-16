@@ -123,9 +123,10 @@ CONFIG_PM_DEVICE_POWER_DOMAIN=y            /* NEW: enables pm_device_is_powered 
 - i2c1 pull-ups are on permanent supply; KTD2026 VIN is on `ls_3_3` only
 
 **`src/Battery/PowerManager.cpp`:**
-- Delete lines 329-337 (conditional `pm_device_runtime_enable` in charging path)
-- Delete lines 366-389 (misleading comment + unconditional enables + 100 ms sleep +
-  `pm_device_runtime_get(ls_1_8)` + `pm_device_runtime_get(ls_sd)`)
+- Delete the conditional `pm_device_runtime_enable` + `_get` block inside
+  `if (charging)` in `begin()`.
+- Delete the unconditional enable + `_get` block after `if (!power_on) return
+  power_down()` in `begin()` (all three rails).
 - If `pm-device-runtime-auto` is set in DTS: delete all `pm_device_runtime_enable`
   calls; they're automatic. Otherwise keep just the three enables, no gets.
 
@@ -230,11 +231,11 @@ clock or fully off (`sys_poweroff()`).
 
 1. **Application policy — `PowerManager` (`src/Battery/PowerManager.{h,cpp}`)**
    - Custom 10-state battery/charging state machine fed by BQ27220 (fuel gauge) +
-     BQ25120A (charger) over I²C1, periodic via two work items
+     BQ25120A (charger) over I²C1, driven by two work items
      (`charge_ctrl_delayable`, `fuel_gauge_work`) and three GPIO callbacks
      (`power_good_callback`, `fuel_gauge_callback`, `battery_controller_callback`).
-   - Owns the boot/power-on/power-off sequence: `begin()` (PowerManager.cpp:254-438)
-     and `power_down()` (PowerManager.cpp:571-668).
+     Classification is factored into a pure `classify_charging()` helper (§6).
+   - Owns the boot/power-on/power-off sequence: `begin()` and `power_down()`.
    - Publishes battery state on the `battery_chan` ZBUS channel.
 
 2. **Power gating — three custom load-switch "devices"**
@@ -248,8 +249,9 @@ clock or fully off (`sys_poweroff()`).
    ```
    The load switches use `pm_device_runtime_*` for refcounting. `ls_3_3` is the
    3.3 V LDO inside the BQ25120A (DT child of `bq25120a@6a`); `ls_1_8` and `ls_sd`
-   are GPIO load switches on `gpio1.11` / `gpio1.12`. They are enabled in
-   `PowerManager::begin()` (lines 329-389).
+   are GPIO load switches on `gpio1.11` / `gpio1.12`. `PowerManager::begin()`
+   `pm_device_runtime_enable`s all three and then `pm_device_runtime_get`s them
+   — see §3.8, §3.9.
 
 3. **Application-level sensor/peripheral wrappers**
    Every sensor driver (`IMU.cpp`, `Baro.cpp`, `BoneConduction.cpp`, `PPG.cpp`,
@@ -261,7 +263,7 @@ clock or fully off (`sys_poweroff()`).
    `compatible = "i2c-device"` and accessed through C++ wrappers, so they have no
    PM action callbacks of their own.
 
-**Power-down sequence (`PowerManager::power_down`, lines 571-668):**
+**Power-down sequence (`PowerManager::power_down`):**
 1. Disconnect all BLE connections (`bt_conn_foreach` → `bt_mgmt_conn_disconnect`)
 2. Stop external advertising
 3. `led_controller.begin()` then `power_off()`  ← see §3.3
@@ -296,11 +298,8 @@ void Sensor::stop() {
 ### Critical
 
 #### 3.1 BLE is never powered down — biggest idle-power leak
-`bt_disable()` is commented out at PowerManager.cpp:607-613:
-```cpp
-//TODO: prevent crashing with bt_disable (does not wake up)
-/*ret = bt_disable(); ... */
-```
+`bt_disable()` is not called before `sys_poweroff()` — only a TODO comment in
+`power_down()` records that it crashes (doesn't wake up) when invoked there.
 Result: the BLE controller (network core + RF) keeps running right up to
 `sys_poweroff()`, and during normal "idle" operation (advertising or connected) it is
 the dominant power consumer. There is no advertising-only / sensors-off mid-power
@@ -315,12 +314,12 @@ policy callback, no `pm_state_force()`, no constraint API usage. The "low power"
 is jump-straight-to-`sys_poweroff()`.
 
 #### 3.3 `power_down` re-initialises the LED controller before turning it off
-PowerManager.cpp:586-587:
+Inside `power_down()`:
 ```cpp
 led_controller.begin();
 led_controller.power_off();
 ```
-`KTD2026::begin()` (KTD2026.cpp:31-47) calls `pm_device_runtime_get(ls_1_8)` +
+`KTD2026::begin()` calls `pm_device_runtime_get(ls_1_8)` +
 `pm_device_runtime_get(ls_3_3)`, sleeps 10 ms, talks to the chip, and resets it.
 `power_off()` then writes the mute register and `_put`s both rails. So if the LED was
 already off (`_active=false`), this path turns ls_3_3 on, talks to the chip, then turns
@@ -362,8 +361,7 @@ setting `_active=true` so a later `stop()` can't recover them.
 `sleep` pinctrl states (`*.dts:95-183`). But nothing ever drives the bus into the
 sleep state — `nordic,nrf-twim` only flips pinctrl when its own PM action callback
 runs, and nobody calls `pm_device_action_run` on the I²C controllers. So the TWIM
-peripheral blocks are clocked continuously. (The commented-out experiment at
-PowerManager.cpp:649-651 shows this was attempted for shutdown but abandoned.)
+peripheral blocks are clocked continuously.
 
 ### High
 
@@ -375,84 +373,63 @@ refcount and the sensor's "active" state are coordinated only by the C++ wrapper
 Easy to leak (see 3.5) and easy to introduce ordering bugs.
 
 #### 3.8 `ls_1_8` and `ls_sd` are pinned on for the device's entire lifetime
-PowerManager.cpp:386-389:
-```cpp
-/* Keep ls_1_8 and ls_sd powered — they're needed for SD card access. */
-pm_device_runtime_get(ls_1_8);
-pm_device_runtime_get(ls_sd);
-```
-These are matching `_put`s only inside `power_down()`. So even when nothing is
-streaming and no SD I/O is happening, both rails stay on, plus the BQ25120A 3.3 V
-LDO control via the BQ25120A `LS_LDO` enable. This makes `SDCardManager::aquire_ls`
-/`release_ls` (which carefully refcounts all three rails for mount/unmount) a no-op
-in practice — the floor on `ls_1_8` and `ls_sd` is ≥1.
+`PowerManager::begin()` does `pm_device_runtime_get(ls_1_8)` +
+`pm_device_runtime_get(ls_3_3)` + `pm_device_runtime_get(ls_sd)` at the bottom
+of the init path (and again, conditionally, on the charging-at-boot branch).
+The matching `_put`s only happen inside `power_down()`. So even when nothing is
+streaming and no SD I/O is happening, all three rails stay on. This makes
+`SDCardManager::aquire_ls`/`release_ls` (which carefully refcounts all three
+rails for mount/unmount) a no-op in practice — the floor on each rail is ≥1.
 
-#### 3.9 Begin-time race in load-switch enablement
-PowerManager.cpp:368-389 calls `pm_device_runtime_enable(ls_1_8)` *after* the device
-has already been resumed via `pm_device_action_run` elsewhere in init paths
-(state_indicator at line 344 will already have called `KTD2026::begin()`, which
-`pm_device_runtime_get`s ls_3_3, which only makes sense if ls_3_3's runtime PM is
-enabled — line 334 enables it conditionally on `charging`, not unconditionally).
-The comment at line 366-367 ("With `pm_device_init_suspended()` in board_init,
-`_enable` is a no-op (no glitch)") suggests there is/was a glitch issue. The code
-later contains `k_sleep(K_MSEC(100))` "Turn the glitch into a real power off." —
-which is a *symptom-treating delay*, not a fix.
+#### 3.9 Begin-time load-switch enablement is duplicated and order-sensitive
+`PowerManager::begin()` enables all three load switches on the non-charging
+path, and separately enables them inside the `if (charging)` branch — which
+runs *before* the main-path enable block. On the charging path the first
+`pm_device_runtime_enable(ls_3_3)` happens before `state_indicator.init` calls
+`KTD2026::begin()` (which claims ls_3_3). On the non-charging path, the
+comment at the enable block notes "With `pm_device_init_suspended()` in
+board_init, `_enable` is a no-op (no glitch)." — which implies there was a
+glitch concern. The whole duplication goes away if `zephyr,pm-device-runtime-auto`
+is added to the load-switch DTS nodes (see §0 "Changes required" and §3.13).
 
 ### Medium
 
 #### 3.10 `power_down` ordering: sensors are stopped before BLE is disconnected
-Look at PowerManager.cpp:574-589:
-1. `bt_conn_foreach` → disconnect
-2. `bt_mgmt_ext_adv_stop`
-3. LED off
-4. `stop_sensor_manager()`
-But `bt_conn_disconnect` is asynchronous — by the time we get to step 4, peer
-disconnect events may not have completed. We then `dac.end()` and stop the watchdog
-while BLE is still tearing down. Re-ordering the audio/sensor teardown to *after*
-BLE has fully torn down would be safer, and would also let us actually call
-`bt_disable()` once the underlying ISO/audio paths are released.
+`power_down()` sequence: `bt_conn_foreach` → disconnect, `bt_mgmt_ext_adv_stop`,
+LED off, `stop_sensor_manager()`. But `bt_conn_disconnect` is asynchronous — by
+the time we get to `stop_sensor_manager()`, peer disconnect events may not have
+completed. We then `dac.end()` and stop the watchdog while BLE is still tearing
+down. Re-ordering the audio/sensor teardown to *after* BLE has fully torn down
+would be safer, and would also let us actually call `bt_disable()` once the
+underlying ISO/audio paths are released.
 
 #### 3.11 The `DEBOUNCE_POWER_MS = K_MSEC(1000)` constant is unused at the place that needs it
-`PowerManager.h:14` defines it, but `power_good_callback` (PowerManager.cpp:69-70)
-schedules `power_down_work` with `K_NO_WAIT`. So unplugging USB while powered-off
-triggers an immediate `power_down`, with no debounce. Not catastrophic but the
-named constant is misleading.
+`PowerManager.h` defines it, but `power_good_callback` schedules
+`power_down_work` with `K_NO_WAIT`. So unplugging USB while powered-off triggers
+an immediate `power_down`, with no debounce. Not catastrophic but the named
+constant is misleading.
 
-#### 3.12 BQ25120A high-impedance protocol is racy
-`exit_high_impedance()` / `enter_high_impedance()` is called in
-`battery_controller_work_handler` (PowerManager.cpp:90-92), `fuel_gauge_work_handler`
-(126/236), `get_battery_status` (482/499), and `power_down` (604/640). These four
-contexts can preempt each other (work items, GPIO callbacks, GATT reads). There is
-no refcount or mutex — if two contexts overlap, the inner one's `enter` will leave
-the chip in HiZ for the outer one. This is a likely source of intermittent fuel-gauge
-read failures, and could plausibly contribute to charge-state glitches.
-
-#### 3.13 `last_charging_msg_state` is set but never read
-PowerManager.cpp:238 — dead code, or an incomplete edge-trigger optimisation. The
-`charge_task` (line 671+) appears to want to act only on state changes (the commented
-`if (last_charging_state != charging_state ||  )` at line 682) but doesn't.
-
-#### 3.14 No fault-recovery path for non-undervoltage faults
-PowerManager.cpp:184-233: only fault bit 5 (battery undervoltage) has a recovery
-transition (line 199-205). OVP / TS / input-UV faults log a warning and re-enter
-`FAULT` state on the next poll, with no exit. TS faults will at least re-call
-`battery_controller.setup(_battery_settings)` (line 221), which might un-stick them,
-but anything else requires user power-cycle.
+#### 3.12 No fault-recovery path for non-undervoltage faults
+In `classify_charging`, only BAT_UVLO (bit 5) has a recovery transition (→
+PRECHARGING when power is connected and current is flowing). OVP / TS / input-UV
+faults fall through to `FAULT` and re-enter it on the next poll with no exit.
+The work handler does re-run `setup_pmic()` on a TS fault, which might un-stick
+the TS path, but everything else requires a user power-cycle.
 
 ### Low / code-quality
 
-#### 3.15 No `zephyr,pm-device-runtime-auto` on the load-switch nodes
+#### 3.13 No `zephyr,pm-device-runtime-auto` on the load-switch nodes
 Adding it to `load_switch`, `load_switch_sd`, and the BQ25120A child `load-switch`
 in `*.dts:26-123` would let us delete the explicit `pm_device_runtime_enable`
 plumbing in `PowerManager::begin()`.
 
-#### 3.16 Synchronous `pm_device_runtime_put` everywhere
+#### 3.14 Synchronous `pm_device_runtime_put` everywhere
 Some shutdown paths (especially PPG, which talks to the chip) could use
 `pm_device_runtime_put_async` so the suspend completes off the calling thread.
 Probably doesn't matter for the rare power-down case but might smooth sensor
 reconfiguration.
 
-#### 3.17 Sensors aren't real Zephyr devices
+#### 3.15 Sensors aren't real Zephyr devices
 Compatible = `"i2c-device"` means: no `init_fn`, no `pm_action_cb`, no
 `PM_DEVICE_DT_INST_DEFINE`. We're paying the price (manual coordination, no domains,
 no auto-runtime, can't piggy-back on system PM) without the benefit (smaller code).
@@ -467,17 +444,17 @@ it's the root cause of half the issues above.
 
 1. **i2c3 sensor dropouts (temp, baro, bone)** — best candidates are §3.4 (BMP388
    has zero pre-cut shutdown; BMA580's stop is fine; the temperature one *does* call
-   `sleepMode`) and §3.9 (load-switch enable glitch / 100 ms hack). The IMU still
-   working *despite* being on the same bus and rail is the most diagnostic clue:
-   it's the one that calls `softReset` (which is more disruptive than nothing). The
-   recently-modified files in `git status` are `BMA580_Sensor.{cpp,h}`, `KTD2026.cpp`,
-   `BQ25120a.cpp`, `PowerManager.cpp`, and the DTS — any of these could have changed
-   the load-switch enable timing or refcount.
+   `sleepMode`) and §3.9 (load-switch enable ordering). The IMU still working
+   *despite* being on the same bus and rail is the most diagnostic clue: it's the
+   one that calls `softReset` (which is more disruptive than nothing).
 
 2. **12 s power-on press** — most likely a BQ25120A button-hold-time register
-   change (BQ25120a.cpp is in the dirty set). Confirm by reading the BQ25120A
-   `Push-button Control` register (0x07) setup in `BQ25120a::setup()`. PowerManager
-   itself doesn't gate on time, only on the WAKE_2 latch.
+   change. The `Push-button Control` register is 0x08; bits `MRRESET[1:0]` set
+   the MR-hold → reset time (00=5s, 01=9s default, 10=11s, 11=15s), and bit
+   `MRWAKE2` sets the WAKE2 latch time (0=1000ms, 1=1500ms default). Firmware
+   never writes 0x08, so timings sit at reset defaults; a previous firmware
+   that felt like "~4s" almost certainly wrote `MRRESET=00`. `PowerManager`
+   itself doesn't gate on time — only on the WAKE2 latch.
 
 3. **Bone conductor data loss at 6400 Hz with SD logging** — primarily a CPU /
    bus-contention issue (i2c3 at 1 MHz vs spi4 SD at 32 MHz, both DMA but both
@@ -500,10 +477,12 @@ it's the root cause of half the issues above.
 2. **Remove KTD2026's unnecessary `ls_1_8` claim** (`KTD2026.cpp:38, 58`). LED
    controller is on i2c1 (permanent pull-ups per schematic); it only needs `ls_3_3`.
 
-3. **PowerManager::begin claims zero load switches.** Delete lines 329-337
-   (conditional enables) and 366-389 (unconditional enables + 100 ms sleep + the two
-   `pm_device_runtime_get` calls). Add `zephyr,pm-device-runtime-auto;` to the three
-   load-switch DTS nodes so enable is automatic. Or keep explicit
+3. **PowerManager::begin claims zero load switches.** Delete both enable blocks
+   in `begin()` (the conditional one inside `if (charging)` and the unconditional
+   one after `if (!power_on) return power_down()`), plus their
+   `pm_device_runtime_get(ls_1_8)` / `pm_device_runtime_get(ls_3_3)` /
+   `pm_device_runtime_get(ls_sd)` calls. Add `zephyr,pm-device-runtime-auto;` to
+   the three load-switch DTS nodes so enable is automatic. Or keep explicit
    `pm_device_runtime_enable` calls but NO `_get`.
 
 4. **SDCardManager: presence-based rail ownership.** `init()` reads `sd_state_pin`;
@@ -521,8 +500,8 @@ it's the root cause of half the issues above.
 
 **Phase 2 — Fix existing issues (§3)**
 
-6. **Delete the spurious `led_controller.begin()` at PowerManager.cpp:586**, and
-   verify shutdown still works.
+6. **Delete the spurious `led_controller.begin()` call in `power_down()`** (§3.3)
+   and verify shutdown still works.
 7. **Add proper sleep modes to BMX160 and BMP388** (`IMU::stop()` and
    `Baro::stop()`) before `pm_device_runtime_put`. Then re-test the i2c3 dropout
    regression. (§3.4)
@@ -531,82 +510,38 @@ it's the root cause of half the issues above.
 9. **`git diff` `BQ25120a.cpp`** against the last known-good firmware for the
    button-hold-time register change. (§4 / 12 s power-on)
 
-**Phase 3 — Charging code cleanup (§6)**
+**Phase 3 — Stretch goals**
 
-10. **BQ25120A ActiveScope RAII guard** (§6.2) — also resolves the HiZ race (§3.12).
-11. **Fix charge_task broken read** (§6.3) — move charger re-init to
-    `power_good_callback`, collapse `charge_task` to one line.
-12. **Extract `classify_charging` pure function** (§6.6) — makes the charging state
-    machine testable.
-
-**Phase 4 — Stretch goals**
-
-13. **Investigate `bt_disable` crash** (§3.1) so BLE can be torn down before
+10. **Investigate `bt_disable` crash** (§3.1) so BLE can be torn down before
     `sys_poweroff`.
-14. **Convert sensors to real Zephyr drivers** with PM action callbacks and
-    `power-domains` pointing at load switches (§3.17).
+11. **Convert sensors to real Zephyr drivers** with PM action callbacks and
+    `power-domains` pointing at load switches (§3.15).
 
 ---
 
-## 6. Charging code: duplication and broken paths
+## 6. Charging code: structure
 
-A close re-read of the charging-related code in `PowerManager.cpp` (the `begin`,
-`charge_task`, `fuel_gauge_work_handler`, `power_good_callback`, `check_battery`,
-`get_battery_status`, `setup_pmic`, and the two shell commands) shows several
-duplication patterns and one outright broken path. Cleaning these up would shrink
-the file by ~70 lines and remove a recurring source of confusion.
+The charging-related code lives in `src/Battery/PowerManager.{h,cpp}` and
+`src/Battery/BQ25120a.{h,cpp}`. A few patterns are load-bearing; grepping for
+these names will orient most changes.
 
-### 6.1 Duplicated `read_charging_state() >> 6` decode (5 sites)
+### `BQ25120a::ChargePhase` — typed enum for the 2-bit charging-phase field
 
-The 2-bit charging-phase field is extracted inline from the BQ25120A status byte
-in five places:
+`enum class ChargePhase : uint8_t { Discharge, Charging, Done, Fault }`. The
+register-0x00 `>> 6` shift lives in a single accessor,
+`BQ25120a::read_charge_phase()`. Everything that cares about phase (the work
+handler's big switch, `get_battery_status` GATT encoding, `cmd_battery_info`)
+uses the enum. One diagnostic (`cmd_sensor_diag`) still prints the raw byte
+inline — deliberate, because it also dumps the full register for debugging.
 
-| Site | Line | Context |
-|------|------|---------|
-| `fuel_gauge_work_handler` | 128 | drives the big switch on hardware phase |
-| `charge_task` | 672 | the "==0" check (see §6.3) |
-| `get_battery_status` | 483 | maps phase → GATT power_state bits |
-| `cmd_battery_info` | 754 | shell print |
-| `cmd_sensor_diag` | 824/830 | shell print |
+### `BQ25120a::ActiveScope` — RAII guard for I2C access to the charger
 
-**Improvement:** Add `BQ25120a::read_charge_phase()` returning a typed enum:
-```cpp
-enum class ChargePhase : uint8_t { Discharge = 0, Charging = 1, Done = 2, Fault = 3 };
-ChargePhase BQ25120a::read_charge_phase();
-```
-All five call sites become `auto phase = battery_controller.read_charge_phase();`,
-the magic `>> 6` shift lives in one place, and switch statements get the
-exhaustiveness check from the typed enum.
+I2C reads/writes to the BQ25120A require the chip to be out of high-impedance
+mode (CD pin low) while the transaction happens. `ActiveScope` is a refcounted
+RAII guard with a `k_mutex` that brackets any such access: the 0→1 transition
+calls `exit_high_impedance()`, the 1→0 transition calls `enter_high_impedance()`,
+and nested/concurrent scopes compose correctly. Call-site usage:
 
-### 6.2 `exit_high_impedance()` / `enter_high_impedance()` brackets (~9 sites)
-
-Manual bracketing of every BQ25120A access (see also §3.12 for the race):
-
-| Site | Lines | Notes |
-|------|-------|-------|
-| `begin` | 264 / 364 | one bracket spans 100 lines of init |
-| `battery_controller_work_handler` | 90 / 92 | wraps `read_button_state` |
-| `fuel_gauge_work_handler` | 126 / 236 | wraps the entire state machine |
-| `get_battery_status` | 482 / 499 | wraps phase + PG read |
-| `power_down` | (implicit) / 604 | asymmetric: only `enter`, after `set_wakeup_int` |
-| `power_down` | 640 / 642 | wraps `write_LS_control(false)` |
-| `cmd_battery_info` | 751 / 762 | wraps phase + control read |
-| `cmd_sensor_diag` | 822 / 850 | wraps fault + LS read |
-| `cmd_sensor_bus_reset` | 896 / 898 | wraps `write_LS_control(false)` |
-
-**Improvement:** RAII guard, owned by the BQ25120a class:
-```cpp
-class BQ25120a::ActiveScope {
-public:
-    explicit ActiveScope(BQ25120a &c) : c_(c) { c_.exit_high_impedance(); }
-    ~ActiveScope() { c_.enter_high_impedance(); }
-    ActiveScope(const ActiveScope&) = delete;
-    ActiveScope& operator=(const ActiveScope&) = delete;
-private:
-    BQ25120a &c_;
-};
-```
-Usage at every call site collapses to:
 ```cpp
 {
     BQ25120a::ActiveScope active(battery_controller);
@@ -614,178 +549,61 @@ Usage at every call site collapses to:
     // ...
 }
 ```
-Bonus: this is the natural place to add the refcount/mutex from §3.12 (make the
-guard increment a counter, only call `exit_high_impedance` on 0→1, only call
-`enter_high_impedance` on 1→0). Concurrent contexts then compose correctly.
 
-### 6.3 `charge_task` is mostly broken dead code
+Most sites use the scope. A few exceptions: `PowerManager::begin()` spans ~100
+lines of init between a manual `exit_high_impedance()` and `enter_high_impedance()`
+because early returns into `power_down()` would dismiss a scope guard at the wrong
+time; and `power_down()` itself has a belt-and-suspenders standalone
+`enter_high_impedance()` after `set_wakeup_int`. `BQ25120a::setup()` and
+`BQ25120a::write_LDO_voltage_control()` use the scope internally.
 
-PowerManager.cpp:671-705. After stripping the commented-out remnants:
-```cpp
-void PowerManager::charge_task() {
-    uint16_t charging_state = battery_controller.read_charging_state() >> 6;  // ← reads from a HiZ chip
-    if (last_charging_state == 0) {
-        battery_controller.setup(_battery_settings);
-        battery_controller.enable_charge();
-    }
-    k_work_submit(&fuel_gauge_work);
-    last_charging_state = charging_state;
-}
-```
-Two real bugs:
+### `charger_init_pending` — ISR → work-queue handoff for charger re-init
 
-1. **The read is unbracketed**, so it happens against a chip still in HiZ from the
-   previous `fuel_gauge_work_handler`'s `enter_high_impedance()` at line 236. The
-   I²C transaction returns whatever HiZ-mode reads return — almost certainly 0.
-2. Because the read is always 0, `last_charging_state` is always 0, and the
-   `if (last_charging_state == 0)` branch fires on **every single tick** of the
-   `charge_ctrl_delayable` work item (every 1-10 s for the device's lifetime).
-   That means `setup()` and `enable_charge()` are silently being re-issued to the
-   PMIC over I²C continuously. Wasted I²C traffic, and a credible source of weird
-   intermittent behaviour if a write lands during a charging-state transition.
+`power_good_callback` runs in GPIO ISR context on USB plug-in/plug-out. I2C can't
+run there, so it can't call `setup_pmic()` directly. Instead, on plug-in it sets
+`charger_init_pending = true` and schedules the `charge_ctrl_delayable` work
+item. `charge_task` (work context) sees the flag, clears it, runs `setup_pmic()`
++ `enable_charge()`, then submits `fuel_gauge_work`. Boot doesn't need to seed
+the flag — `begin()` calls `setup_pmic()` once up front.
 
-The intended logic appears to have been "re-init the charger on USB plug-in," but
-it was expressed indirectly via `last_charging_state` being reset to 0 by
-`power_good_callback` (line 66). That indirection broke when the bracketing was
-forgotten.
+### `PowerManager::setup_pmic()` — single entry point for charger configuration
 
-**Improvement:** Move the re-init to where it belongs and collapse the task:
-```cpp
-// power_good_callback (line 60)
-void PowerManager::power_good_callback(...) {
-    bool power_good = battery_controller.power_connected();
-    k_work_submit(&fuel_gauge_work);
-    if (power_good) {
-        BQ25120a::ActiveScope active(battery_controller);
-        battery_controller.setup(power_manager._battery_settings);
-        battery_controller.enable_charge();
-        k_work_schedule(&charge_ctrl_delayable, K_NO_WAIT);
-    } else {
-        k_work_cancel_delayable(&charge_ctrl_delayable);
-        if (!power_manager.power_on)
-            k_work_reschedule(&power_manager.power_down_work, K_NO_WAIT);
-    }
-}
+All charger-configure paths (`begin()`, `charge_task()` on plug-in,
+`fuel_gauge_work_handler` on TS-fault recovery, the `sensor_diag` shell command)
+route through `setup_pmic()`. `_battery_settings` is referenced in exactly one
+place outside the member declaration. `BQ25120a::setup()` holds its own
+`ActiveScope` internally, so `setup_pmic()` adds no extra bracketing.
 
-// charge_task collapses to one line:
-void PowerManager::charge_task() {
-    k_work_submit(&fuel_gauge_work);
-}
-```
-Then `last_charging_state` can be deleted entirely. Combined with deleting
-`last_charging_msg_state` (§3.13), two stale members go away.
+### `BQ25120a::fault_bits[]` — single source of truth for fault-register labels
 
-### 6.4 Three call sites for `battery_controller.setup(_battery_settings)`, plus a redundant wrapper
+A constexpr array of `{mask, name}` pairs for register 0x01 (faults). The work
+handler's `LOG_WRN` loop and the shell diag's `shell_print` loop both iterate
+this array. Labels follow BQ25120A datasheet Table 13 exactly:
+B4=BAT_OCP (cleared on read), B5=BAT_UVLO (persistent), B6=VIN_UV (cleared on
+read), B7=VIN_OV (persistent). Heads-up: upstream commit `91d4081` swapped the
+B4/B7 names in 2025-05; the swap is fixed here but still lives in upstream.
 
-| Site | Line | Reason |
-|------|------|--------|
-| `begin` | 296 | boot init |
-| `charge_task` | 678 | the broken path from §6.3 |
-| `fuel_gauge_work_handler` | 221 | TS-fault recovery |
-| `setup_pmic()` (public method) | 545-547 | trivial wrapper used only by `cmd_sensor_diag` line 845 |
+### `classify_charging()` — pure state classifier
 
-**Improvement:** After §6.3 the `charge_task` site moves to `power_good_callback`.
-Make `setup_pmic()` the **only** internal entry point and route all four call
-sites through it:
-```cpp
-void PowerManager::setup_pmic() {
-    BQ25120a::ActiveScope active(battery_controller);
-    battery_controller.setup(_battery_settings);
-}
-```
-Now `_battery_settings` is referenced in exactly one place inside the class (the
-member declaration), and "configure the charger" is one method to grep for.
+`fuel_gauge_work_handler` separates three concerns:
 
-### 6.5 Duplicated fault-bit decode (2 sites)
+1. **Read** hardware state into `struct charging_snapshot` (phase, `bat_status`,
+   `gauge_status`, fault byte, voltage, current, target current, `power_connected`).
+2. **Classify** via file-static pure `classify_charging(snapshot, cfg) → enum
+   charging_state`. Zero I/O, no logging, no side effects — unit-testable in
+   isolation (no tests written yet).
+3. **Side effects** on the result: logging by phase, TS-fault recovery
+   (`setup_pmic()`), zbus publish, polling-interval adjustment.
 
-Fault bit names are spelled out twice with the same comments:
+The undervoltage-recovery edge case (BAT_UVLO + power connected + current
+flowing → PRECHARGING) is a single branch inside the classifier rather than a
+side-effecting hairball in the switch.
 
-- `fuel_gauge_work_handler` lines 194-215 — `LOG_WRN` during the polling loop
-- `cmd_sensor_diag` lines 832-835 — `shell_print` for the diagnostic command
+### `cmd_battery_info` vs. work-handler LOG_DBG dump
 
-**Improvement:** Single helper on `BQ25120a` (or a free function in the .cpp) that
-takes the fault byte and a `void(*)(const char*)`-style emit callback. Both call
-sites pass `LOG_WRN` or `shell_print`. Or even simpler — return a
-`const char *` for each set bit and let the caller format.
-
-### 6.6 Inline classification belongs in a pure function
-
-`fuel_gauge_work_handler` lines 128-234 mixes three concerns into one ~110-line
-handler:
-
-1. **Read** hardware state (charging phase, `bat_status`, voltage, current,
-   `gauging_state`, fault byte, TS fault byte).
-2. **Classify** the combined hardware state into the application-level
-   `enum charging_state` (DISCHARGING / BATTERY_LOW / BATTERY_CRITICAL /
-   POWER_CONNECTED / PRECHARGING / CHARGING / TRICKLE_CHARGING / FULLY_CHARGED /
-   FAULT).
-3. **Side effects:** log, run TS-fault recovery, publish on ZBUS, adjust polling
-   interval.
-
-**Improvement:** Pull (2) out into a pure function that takes a snapshot struct
-and returns the enum. Then the work handler reads the hardware once into the
-snapshot, calls the classifier, and runs the side effects on the result.
-```cpp
-struct charging_snapshot {
-    BQ25120a::ChargePhase phase;
-    bat_status bat;
-    gauge_status gs;
-    float voltage_v;
-    float current_ma;
-    float target_current_ma;
-    bool power_connected;
-};
-
-enum charging_state classify_charging(const charging_snapshot &s,
-                                      const battery_settings &cfg);
-```
-Benefits:
-- The classifier is **testable** in isolation — feed it 20 hand-crafted snapshots
-  and assert the right state comes out. None of the existing code paths can be
-  unit-tested at all.
-- The undervoltage-recovery edge case (`fuel_gauge_work_handler` lines 199-205)
-  becomes one branch in the classifier instead of a side-effecting hairball.
-- The work handler shrinks to ~25 lines.
-
-Risk: this is the only refactor with non-trivial behaviour implications, so do it
-**after** the cleanup in 6.1-6.5 is in place and you can re-test the device.
-
-### 6.7 Two stale "last state" tracking variables
-
-Already partially covered in §3.13. After §6.3, both `last_charging_state` and
-`last_charging_msg_state` can be removed: the first is only used by the broken
-charge_task path, the second is set but never read.
-
-### 6.8 `cmd_battery_info` duplicates the `fuel_gauge_work_handler` LOG_DBG dump
-
-The shell command at lines 718-765 prints essentially the same fields the work
-handler `LOG_DBG`s at lines 224-232 — but in different formats and with different
-field selections. Lower-priority cosmetic clean-up: define a `battery_snapshot`
-formatter that takes a print callback (`printk` for log, `shell_print` for the
-command). Only worth doing if you find yourself adding fields. Mentioned for
-completeness.
-
-### Rough cost/benefit
-
-| Item | Lines saved | Risk | Notes |
-|------|------------:|------|-------|
-| 6.1 ChargePhase enum | ~10 | very low | mechanical |
-| 6.2 ActiveScope RAII | ~15 + bug-fix | low | also resolves §3.12 race |
-| 6.3 charge_task collapse | ~25 | low | **fixes a real bug** |
-| 6.4 setup_pmic consolidation | ~5 | very low | one entry point |
-| 6.5 fault decode helper | ~10 | very low | mechanical |
-| 6.6 classify_charging | (~0 net) | medium | unlocks unit testing |
-| 6.7 delete stale members | ~5 | very low | falls out of 6.3 |
-| 6.8 snapshot formatter | (~0 net) | very low | optional |
-
-Total: ~70 lines smaller, one real bug fixed (continuous PMIC reconfiguration,
-§6.3), one race resolved (§3.12 via 6.2), and the hardest bit of logic
-(classification) becomes testable.
-
-**Suggested order:** 6.1 → 6.2 → 6.4 → 6.5 → 6.7 → 6.3 → 6.6. (6.3 last among
-the cleanup items because it touches behaviour; 6.6 last because it's the
-biggest change and benefits from having the helpers from 6.1-6.5 already in
-place.)
+Both print overlapping battery snapshots in slightly different formats. Not
+consolidated; a shared formatter taking a `printk`/`shell_print` callback is the
+natural next step if fields need to be added.
 
 ---
 
@@ -794,8 +612,8 @@ place.)
 | File | Notes |
 |------|-------|
 | `src/Battery/PowerManager.h` | Class definition; `DEBOUNCE_POWER_MS`; battery_settings constants |
-| `src/Battery/PowerManager.cpp` | All the issues numbered above |
-| `src/Battery/BQ25120a.{cpp,h}` | Charger; high-impedance, button hold time, LS_LDO (likely changed for §3.4 / 12 s power-on) |
+| `src/Battery/PowerManager.cpp` | `begin`, `power_down`, work handlers, shell commands; most of §3 lives here |
+| `src/Battery/BQ25120a.{cpp,h}` | Charger; HiZ + `ActiveScope`, `ChargePhase`, `fault_bits`; button-hold-time registers (0x08) are not written, see §4 / 12 s power-on |
 | `src/Battery/BQ27220.{cpp,h}` | Fuel gauge; wakeup interrupts |
 | `boards/teco/openearable_v2/board_init.c` | Custom load-switch PM devices |
 | `boards/teco/openearable_v2/openearable_v2_nrf5340_cpuapp_common.dts` | I²C/load-switch nodes; missing pm-device-runtime-auto |
