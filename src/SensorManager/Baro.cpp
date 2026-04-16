@@ -121,5 +121,9 @@ void Baro::stop() {
 	k_timer_stop(&sensor.sensor_timer);
 	k_work_cancel(&sensor.sensor_work);
 
+    /* Put BMP388 into sleep before cutting V_LS so the chip isn't mid-
+     * conversion when i2c3 drops. Suspect for the i2c3 dropout regression. */
+    if (!bmp.sleep()) LOG_WRN("BMP388 sleep failed");
+
     pm_device_runtime_put(ls_1_8);
 }

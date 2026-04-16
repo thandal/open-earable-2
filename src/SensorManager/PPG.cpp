@@ -20,6 +20,14 @@ static uint32_t ppg_queue_full_count;
 static uint32_t ppg_calls, ppg_max_us;
 static uint64_t ppg_total_us;
 
+/* External LDO enable for the PPG AFE. Separate from ls_1_8/ls_3_3 — must
+ * be driven LOW in stop() so the LDO actually turns off. */
+static const struct gpio_dt_spec ppg_ldo_en = {
+    .port = DEVICE_DT_GET(DT_NODELABEL(gpio0)),
+    .pin = 6,
+    .dt_flags = GPIO_ACTIVE_HIGH,
+};
+
 const SampleRateSetting<16> PPG::sample_rates = {
     { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x0A, 0x0B,
     0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13 },
@@ -36,29 +44,26 @@ bool PPG::init() {
         pm_device_runtime_get(ls_1_8);
         pm_device_runtime_get(ls_3_3);
 
-        const struct gpio_dt_spec LDO_EN = {
-            .port = DEVICE_DT_GET(DT_NODELABEL(gpio0)),
-            .pin = 6,
-            .dt_flags = GPIO_ACTIVE_HIGH
-        };
-
-        int ret = gpio_pin_configure_dt(&LDO_EN, GPIO_OUTPUT_ACTIVE);
+        int ret = gpio_pin_configure_dt(&ppg_ldo_en, GPIO_OUTPUT_ACTIVE);
         if (ret != 0) {
-            LOG_WRN("Failed to set GPOUT as input.\n");
+            LOG_WRN("Failed to enable PPG LDO: %d", ret);
+            pm_device_runtime_put(ls_1_8);
+            pm_device_runtime_put(ls_3_3);
             return false;
         }
 
         k_msleep(5);
 
-    	_active = true;
-	}
-    
+        _active = true;
+    }
+
     if (ppg.init() != 0) {   // hardware I2C mode, can pass in address & alt Wire
-		LOG_WRN("Could not find a valid PPG sensor, check wiring!");
+        LOG_WRN("Could not find a valid PPG sensor, check wiring!");
         _active = false;
+        gpio_pin_set_dt(&ppg_ldo_en, 0);
         pm_device_runtime_put(ls_1_8);
         pm_device_runtime_put(ls_3_3);
-		return false;
+        return false;
     }
 
 	k_work_init(&sensor.sensor_work, update_sensor);
@@ -178,6 +183,11 @@ void PPG::stop() {
 	k_work_cancel(&sensor.sensor_work);
 
     ppg.stop();
+
+    /* Drop the external LDO enable before cutting the load switches —
+     * the LDO stays powered by ls_3_3, so dropping ls_3_3 alone leaves the
+     * LDO in an undefined state. */
+    gpio_pin_set_dt(&ppg_ldo_en, 0);
 
     pm_device_runtime_put(ls_1_8);
     pm_device_runtime_put(ls_3_3);

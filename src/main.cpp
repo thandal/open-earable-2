@@ -37,6 +37,7 @@ extern "C" {
 
 #include "Battery/PowerManager.h"
 #include "SensorManager/SensorManager.h"
+#include "SD_Card/SD_Card_Manager/SD_Card_Manager.h"
 #include "utils/StateIndicator.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_MAIN_LOG_LEVEL);
@@ -63,7 +64,9 @@ int main(void) {
 
 #if defined(CONFIG_USB_DEVICE_STACK_NEXT)
 	{
-		/* Initialize SD card before USB so MSC can report media present */
+		/* Bring SD rails up (if a card is present) before disk probe and USB
+		 * enable so MSC sees the card on first host poll. */
+		sdcard_manager.init();
 		disk_access_init("SD");
 
 		g_usbd = sample_usbd_init_device(NULL);

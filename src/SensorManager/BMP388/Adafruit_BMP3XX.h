@@ -62,6 +62,10 @@ public:
   /// Perform a reading in blocking mode
   bool performReading(void);
 
+  /// Put the sensor into sleep mode (stops conversions).
+  /// Call before cutting power to avoid leaving the chip mid-conversion.
+  bool sleep(void);
+
   /// Temperature (Celsius) assigned after calling performReading()
   double temperature;
   /// Pressure (Pascals) assigned after calling performReading()

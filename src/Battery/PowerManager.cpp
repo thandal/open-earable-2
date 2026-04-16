@@ -294,29 +294,6 @@ int PowerManager::begin() {
     }
 
     if (charging) {
-        /* Enable PM runtime for load switches needed during charging.
-         * ls_3_3 is claimed on demand by state_indicator. */
-        int ret = pm_device_runtime_enable(ls_1_8);
-        if (ret != 0) {
-            LOG_WRN("Error setting up load switch 1.8V.");
-        }
-        /* Immediately resume — V_LS powers the SPI level shifter; even a
-         * brief drop corrupts the SD card's SPI state. */
-        pm_device_runtime_get(ls_1_8);
-
-        ret = pm_device_runtime_enable(ls_3_3);
-        if (ret != 0) {
-            LOG_WRN("Error setting up load switch 3.3V.");
-        }
-        pm_device_runtime_get(ls_3_3);
-
-        ret = pm_device_runtime_enable(ls_sd);
-        if (ret != 0) {
-            LOG_WRN("Error setting up load switch SD.");
-        }
-        pm_device_runtime_get(ls_sd);
-
-
         oe_state.charging_state = POWER_CONNECTED;
 
         k_work_schedule(&charge_ctrl_delayable, K_NO_WAIT);
@@ -339,28 +316,7 @@ int PowerManager::begin() {
 
     battery_controller.enter_high_impedance();
 
-    /* Enable PM runtime for all load switches. With pm_device_init_suspended()
-     * in board_init, _enable is a no-op (no glitch). */
-    int ret = pm_device_runtime_enable(ls_1_8);
-    if (ret != 0) {
-        LOG_WRN("Error setting up load switch 1.8V.");
-    }
-    pm_device_runtime_get(ls_1_8);
-
-    ret = pm_device_runtime_enable(ls_3_3);
-    if (ret != 0) {
-        LOG_WRN("Error setting up load switch 3.3V.");
-    }
-    pm_device_runtime_get(ls_3_3);
-
-    ret = pm_device_runtime_enable(ls_sd);
-    if (ret != 0) {
-        LOG_WRN("Error setting up load switch SD.");
-    }
-    pm_device_runtime_get(ls_sd);
-
-
-    ret = device_is_ready(error_led.port);
+    int ret = device_is_ready(error_led.port);
     if (!ret) {
         LOG_WRN("Error LED not ready.");
     }
@@ -543,7 +499,6 @@ int PowerManager::power_down(bool fault) {
         LOG_WRN("Failed to stop ext adv: %d", ret);
     }
 
-    led_controller.begin();
     led_controller.power_off();
 
     stop_sensor_manager();

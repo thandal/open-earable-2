@@ -44,12 +44,26 @@ void SDCardManager::unmount_work_handler(struct k_work *work) {
 
 	bool _inserted = sdcard_manager.sd_inserted();
 
-	sd_msg msg = { .removed = true };
+	if (_inserted && !sdcard_manager.ls_aquired) {
+		ret = sdcard_manager.aquire_ls();
+		if (ret && ret != -EALREADY) {
+			LOG_ERR("Failed to acquire rails on SD insertion: %d", ret);
+			return;
+		}
+		LOG_INF("SD card inserted; rails up for USB MSC.");
 
-    if (!_inserted) {
+		sd_msg msg = { .removed = false };
+		ret = zbus_chan_pub(&sd_card_chan, &msg, K_FOREVER);
+		if (ret != 0) {
+			LOG_ERR("Failed to publish sd_card_chan: %d", ret);
+		}
+	} else if (!_inserted && sdcard_manager.ls_aquired) {
 		ret = sdcard_manager.unmount();
 		LOG_INF("SD card unmounted due to card removal.");
-		
+
+		sdcard_manager.release_ls();
+
+		sd_msg msg = { .removed = true };
 		ret = zbus_chan_pub(&sd_card_chan, &msg, K_FOREVER);
 		if (ret != 0) {
 			LOG_ERR("Failed to publish sd_card_chan: %d", ret);
@@ -86,23 +100,17 @@ int SDCardManager::aquire_ls() {
 
 	if (ls_aquired) return -EALREADY;
 
+	/* SD path: ls_1_8 (level-shifter low side) + ls_sd (card VDD).
+	 * ls_3_3 is not required by the SD card per schematic. */
 	ret = pm_device_runtime_get(ls_1_8);
 	if (ret) {
 		LOG_ERR("Failed to get ls_1_8");
 		return ret;
 	}
 
-	ret = pm_device_runtime_get(ls_3_3);
-	if (ret) {
-		pm_device_runtime_put(ls_1_8);
-		LOG_ERR("Failed to get ls_3_3");
-		return ret;
-	}
-
 	ret = pm_device_runtime_get(ls_sd);
 	if (ret) {
 		pm_device_runtime_put(ls_1_8);
-		pm_device_runtime_put(ls_3_3);
 		LOG_ERR("Failed to get ls_sd");
 		return ret;
 	}
@@ -113,13 +121,10 @@ int SDCardManager::aquire_ls() {
 }
 
 int SDCardManager::release_ls() {
-	int ret;
-
 	if (!ls_aquired) return -EALREADY;
 
-	ret = pm_device_runtime_put(ls_1_8);
-	ret = pm_device_runtime_put(ls_3_3);
-	ret = pm_device_runtime_put(ls_sd);
+	pm_device_runtime_put(ls_1_8);
+	pm_device_runtime_put(ls_sd);
 
 	ls_aquired = false;
 
@@ -127,11 +132,10 @@ int SDCardManager::release_ls() {
 }
 
 void SDCardManager::init() {
-	int ret;
+    int ret;
 
     if (!device_is_ready(sd_state_pin.port)) {
-		ret = aquire_ls();
-        LOG_ERR("SD state GPIO device not ready\n");
+        LOG_ERR("SD state GPIO device not ready");
         return;
     }
 
@@ -141,7 +145,25 @@ void SDCardManager::init() {
     gpio_init_callback(&sd_state_cb, sd_card_state_change_isr, sd_state_cb.pin_mask | BIT(sd_state_pin.pin));
     ret = gpio_add_callback(sd_state_pin.port, &sd_state_cb);
 
-	if (ret) LOG_ERR("Failed to add callback");
+    if (ret) LOG_ERR("Failed to add callback");
+
+    /* The card-detect GPIO on this board only reports presence once the SD
+     * rails are up (the detect switch references card VDD). Probe by briefly
+     * bringing rails up; keep them if a card is there, release otherwise. */
+    ret = aquire_ls();
+    if (ret && ret != -EALREADY) {
+        LOG_ERR("Failed to acquire SD rails for presence probe: %d", ret);
+        return;
+    }
+
+    k_usleep(1000);
+
+    if (sd_inserted()) {
+        LOG_INF("SD card present at boot; rails up.");
+    } else {
+        release_ls();
+        LOG_INF("No SD card at boot; rails down.");
+    }
 }
 
 int SDCardManager::unmount() {
@@ -168,20 +190,15 @@ int SDCardManager::unmount() {
 
 #if defined(CONFIG_USB_DEVICE_STACK_NEXT) && defined(CONFIG_USBD_MSC_CLASS)
 		/* Re-enable USB so the host can access the SD card via MSC.
-		 * Keep load switches on — USB MSC needs the SD card powered. */
+		 * Rails are held by card-presence, independent of mount state. */
 		if (g_usbd) {
 			ret = usbd_enable(g_usbd);
 			if (ret) {
 				LOG_ERR("Failed to re-enable USB: %d", ret);
-				release_ls();
 			} else {
 				LOG_INF("USB MSC re-enabled");
 			}
-		} else {
-			release_ls();
 		}
-#else
-		release_ls();
 #endif
 	}
 
@@ -196,9 +213,17 @@ int SDCardManager::mount() {
 	uint32_t sector_count;
 	size_t sector_size;
 
+	bool _sd_inserted = sd_inserted();
+
+	if (!_sd_inserted) {
+		LOG_ERR("No SD card inserted.");
+		return -ENODEV;
+	}
+
 #if defined(CONFIG_USB_DEVICE_STACK_NEXT) && defined(CONFIG_USBD_MSC_CLASS)
 	/* Disable USB so the host releases the SD card, giving firmware
-	 * exclusive access for filesystem operations. */
+	 * exclusive access for filesystem operations. Rails are already held
+	 * by card-presence. */
 	if (g_usbd) {
 		ret = usbd_disable(g_usbd);
 		if (ret) {
@@ -209,26 +234,14 @@ int SDCardManager::mount() {
 	}
 #endif
 
-	ret = aquire_ls();
-
-	bool _sd_inserted = sd_inserted();
-
-	if (!_sd_inserted) {
-		release_ls();
-		LOG_ERR("No SD card inserted.");
-		return -ENODEV;
-	}
-
 	ret = disk_access_init(sd_dev);
 	if (ret) {
-		release_ls();
 		LOG_DBG("SD card init failed, please check if SD card inserted");
 		return -ENODEV;
 	}
 
 	ret = disk_access_ioctl(sd_dev, DISK_IOCTL_GET_SECTOR_COUNT, &sector_count);
 	if (ret) {
-		release_ls();
 		LOG_ERR("Unable to get sector count");
 		return ret;
 	}
@@ -237,7 +250,6 @@ int SDCardManager::mount() {
 
 	ret = disk_access_ioctl(sd_dev, DISK_IOCTL_GET_SECTOR_SIZE, &sector_size);
 	if (ret) {
-		release_ls();
 		LOG_ERR("Unable to get sector size");
 		return ret;
 	}
@@ -259,7 +271,6 @@ int SDCardManager::mount() {
 			LOG_ERR("Mnt. disk failed, could be format issue. should be FAT/exFAT. Error: %d", ret);
 
 			if (ret != -EBUSY) {
-				release_ls();
 				return ret;
 			}
 		}
@@ -268,7 +279,6 @@ int SDCardManager::mount() {
 	ret = k_mutex_lock(&m_sem_sd_mngr_oper_ongoing, K_FOREVER);
 	if (ret) {
 		k_mutex_unlock(&m_sem_sd_mngr_oper_ongoing);
-		release_ls();
 		LOG_ERR("Sem take failed. Ret: %d", ret);
 		return ret;
 	}
@@ -277,7 +287,6 @@ int SDCardManager::mount() {
 	ret = fs_opendir(&this->dirp, this->path.c_str());
 	k_mutex_unlock(&m_sem_sd_mngr_oper_ongoing);
 	if (ret) {
-		release_ls();
 		LOG_ERR("Open root dir failed. Error: %d", ret);
 		return ret;
 	}

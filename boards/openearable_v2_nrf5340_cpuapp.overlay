@@ -29,5 +29,8 @@
 		t-exit-dpd = <5000>;
 		dpd-wakeup-sequence = <30000 20 45000>;
 		mxicy,mx25r-power-mode = "high-performance";
+
+		power-domains = <&load_switch>;
+		zephyr,pm-device-runtime-auto;
 	};
 };

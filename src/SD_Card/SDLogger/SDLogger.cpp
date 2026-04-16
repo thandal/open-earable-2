@@ -185,8 +185,6 @@ void SDLogger::sensor_sd_task() {
 int SDLogger::init() {
     int ret;
 
-    sd_card->init();
-
     ring_buf_init(&ring_buffer, BUFFER_SIZE, buffer);
 
     atomic_clear(&g_stop_writing);

@@ -239,6 +239,11 @@ bool Adafruit_BMP3XX::performReading(void) {
   return true;
 }
 
+bool Adafruit_BMP3XX::sleep(void) {
+  the_sensor.settings.op_mode = BMP3_MODE_SLEEP;
+  return bmp3_set_op_mode(&the_sensor) == BMP3_OK;
+}
+
 /**************************************************************************/
 /*!
     @brief  Setter for Temperature oversampling

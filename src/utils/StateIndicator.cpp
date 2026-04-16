@@ -10,6 +10,8 @@
 #include "channel_assignment.h"
 
 #ifdef CONFIG_MCUMGR_MGMT_NOTIFICATION_HOOKS
+#include <zephyr/device.h>
+#include <zephyr/pm/device_runtime.h>
 #include <zephyr/mgmt/mcumgr/mgmt/mgmt.h>
 #include <zephyr/mgmt/mcumgr/mgmt/callbacks.h>
 #endif
@@ -24,26 +26,32 @@ ZBUS_CHAN_DECLARE(battery_chan);
 
 struct mgmt_callback mcu_mgr_cb;
 
+/* The external SPI NOR (MX25R6435F) sits behind ls_1_8 via power-domains;
+ * runtime-PM auto is enabled on the DT node. Acquire on DFU start so the
+ * spi_nor driver's TURN_ON/RESUME runs (JEDEC probe, DPD exit); release on
+ * stop so the driver re-enters DPD and ls_1_8 drops if no one else holds it. */
+static const struct device *const mx25r64_dev = DEVICE_DT_GET(DT_NODELABEL(mx25r64));
+
 enum mgmt_cb_return chuck_write_indication(uint32_t event, enum mgmt_cb_return prev_status,
                                 int32_t *rc, uint16_t *group, bool *abort_more,
                                 void *data, size_t data_size)
 {
-    if (event == MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK) {
-        /* This is the event we registered for */
-		led_controller.setColor(LED_ORANGE);
+    switch (event) {
+    case MGMT_EVT_OP_IMG_MGMT_DFU_STARTED:
+        pm_device_runtime_get(mx25r64_dev);
+        break;
+    case MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED:
+        pm_device_runtime_put(mx25r64_dev);
+        break;
+    case MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK:
+        led_controller.setColor(LED_ORANGE);
         k_msleep(10);
         led_controller.setColor(LED_OFF);
+        break;
+    default:
+        break;
     }
-    /*else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK_WRITE_COMPLETE) {
-        led_controller.setColor(LED_OFF);
-    }
-    else if (event == MGMT_EVT_OP_OS_MGMT_RESET) {
-		LOG_INF("RESET received");
-	}*/
 
-	//LOG_DBG("mcu mgr hook called with event: %d", event);
-
-    /* Return OK status code to continue with acceptance to underlying handler */
     return MGMT_CB_OK;
 }
 
@@ -131,9 +139,9 @@ void StateIndicator::init(struct earable_state state) {
 		LOG_ERR("Failed to add battery listener");
 	}
 
-#ifdef CONFIG_MCUMGR_MGMT_NOTIFICATION_HOOKS 
-	mcu_mgr_cb.callback = chuck_write_indication;
-    mcu_mgr_cb.event_id = MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK; //MGMT_EVT_OP_IMG_MGMT_ALL
+#ifdef CONFIG_MCUMGR_MGMT_NOTIFICATION_HOOKS
+    mcu_mgr_cb.callback = chuck_write_indication;
+    mcu_mgr_cb.event_id = MGMT_EVT_OP_IMG_MGMT_ALL;
     mgmt_callback_register(&mcu_mgr_cb);
 #endif
 

@@ -48,11 +48,9 @@ void KTD2026::reset() {
          * Reg0[2:0]=111 ("Reset Complete Chip") then wait 200 µs.
          *
          * Empirical observation: on any MCU-only reboot (sys_reboot, incl.
-         * SYS_REBOOT_COLD). The chip NACKs this reset write, but
-         * still ACKs writes to other registers (Reg 4/6 etc.), so subsequent
-         * LED ops work fine. The exact reason is not documented; we haven't
-         * nailed it down but every plausible explanation we can think of is
-         * consistent with "chip works, just doesn't honor a redundant reset".
+         * SYS_REBOOT_COLD), the chip NACKs this reset write, but still ACKs
+         * writes to other registers (Reg 4/6 etc.), so subsequent LED ops work
+         * fine. The exact reason is not documented.
          *
          * We issue the command anyway so true cold power cycles (battery
          * disconnect, or sys_poweroff→wake which disables the LS/LDO) still
