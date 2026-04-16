@@ -560,7 +560,14 @@ int PowerManager::power_down(bool fault) {
         battery_controller.enter_high_impedance();
     }
 
-    // TODO: bt_disable() crashes here (doesn't wake up). See POWER_DESCRIPTION.md §3.1.
+    // Let BT disconnect events from bt_conn_disconnect above propagate, then
+    // tear down the host. Side effect: on nRF5340 this also writes
+    // NETWORK.FORCEOFF=Hold via the bt_hci_transport_teardown → nrf53_cpunet_enable(false)
+    // path (zephyr/drivers/bluetooth/hci/nrf53_support.c + nrf53_cpunet_mgmt.c),
+    // so no separate net-core shutdown is needed here.
+    k_msleep(200);
+    int bt_ret = bt_disable();
+    if (bt_ret) LOG_WRN("bt_disable() failed: %d", bt_ret);
 
     if (fault) {
         LOG_WRN("Power off due to fault");
@@ -589,6 +596,30 @@ int PowerManager::power_down(bool fault) {
     ret = pm_device_action_run(ls_sd,  PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_3_3, PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_1_8, PM_DEVICE_ACTION_SUSPEND);
+
+    // Pre-poweroff audit. Expected: load-switch pins LOW, EN_LS_LDO=0,
+    // pmic_cd=0 (BQ25120A in Hi-Z; datasheet Table 1: CD=L with VIN absent →
+    // Hi-Z ~1.4 µA quiescent, SYS still powered by BAT). netcore_off reflects
+    // whatever bt_disable() left behind. Anything else is a possible leak.
+    {
+        uint8_t ls_1_8_pin = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(1, 11));
+        uint8_t ls_3_3_pin = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 14));
+        uint8_t ls_sd_pin  = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(1, 12));
+        uint8_t ppg_ldo    = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 6));
+        uint8_t pmic_cd    = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 17));
+        uint8_t netcore_off = NRF_RESET->NETWORK.FORCEOFF & 1;
+        uint8_t en_ls_ldo;
+        {
+            BQ25120a::ActiveScope active(battery_controller);
+            en_ls_ldo = (battery_controller.read_ls_ldo_ctrl_raw() >> 7) & 1;
+        }
+        LOG_WRN("poweroff audit: ls_1_8=%u ls_3_3=%u ls_sd=%u ppg_ldo=%u "
+                "EN_LS_LDO=%u pmic_cd=%u netcore_off=%u",
+                ls_1_8_pin, ls_3_3_pin, ls_sd_pin, ppg_ldo,
+                en_ls_ldo, pmic_cd, netcore_off);
+        LOG_PANIC();
+    }
+
     ret = pm_device_action_run(cons, PM_DEVICE_ACTION_SUSPEND);
 
     sys_poweroff();

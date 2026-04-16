@@ -297,14 +297,22 @@ void Sensor::stop() {
 
 ### Critical
 
-#### 3.1 BLE is never powered down — biggest idle-power leak
-`bt_disable()` is not called before `sys_poweroff()` — only a TODO comment in
-`power_down()` records that it crashes (doesn't wake up) when invoked there.
-Result: the BLE controller (network core + RF) keeps running right up to
-`sys_poweroff()`, and during normal "idle" operation (advertising or connected) it is
-the dominant power consumer. There is no advertising-only / sensors-off mid-power
-state — the device is "everything on" or "off". The 12 s power-on delay reported in
-`PROBLEMS.md` may also be downstream of BLE init being slow.
+#### 3.1 No mid-power "BLE advertising only" state
+During normal "idle" operation (advertising or connected) the BLE controller
+(network core + RF) is the dominant power consumer. There is no
+advertising-only / sensors-off mid-power state — the device is "everything on"
+or "off". The 12 s power-on delay reported in `PROBLEMS.md` may also be
+downstream of BLE init being slow. The **poweroff** path is handled — see §3.1a.
+
+#### 3.1a `bt_disable()` in `power_down()` — works
+Empirically tested on-device: `bt_disable()` returns 0 in ~234 ms and the audit
+reports `netcore_off=1`. Code path: `bt_disable()` → HCI driver close hook →
+`bt_hci_transport_teardown()` at `zephyr/drivers/bluetooth/hci/nrf53_support.c:23`
+→ `nrf53_cpunet_enable(false)` → onoff refcount → 0 → `onoff_stop` callback
+writes `NETWORK.FORCEOFF = Hold` via the HAL. Upstream Zephyr, not NCS-specific.
+The old "crashes / doesn't wake up" comment in the source was stale and has
+been removed. A 200 ms sleep before the call lets earlier `bt_conn_disconnect`
+events propagate.
 
 #### 3.2 No system PM is actually used
 `CONFIG_PM=y` is set but the application never enters a low-power sleep state.
@@ -512,9 +520,7 @@ it's the root cause of half the issues above.
 
 **Phase 3 — Stretch goals**
 
-10. **Investigate `bt_disable` crash** (§3.1) so BLE can be torn down before
-    `sys_poweroff`.
-11. **Convert sensors to real Zephyr drivers** with PM action callbacks and
+10. **Convert sensors to real Zephyr drivers** with PM action callbacks and
     `power-domains` pointing at load switches (§3.15).
 
 ---
