@@ -53,17 +53,33 @@ static int cmd_sd_bench(const struct shell *sh, size_t argc, char **argv)
     static uint8_t wbuf[16384];
     memset(wbuf, 0xAA, sizeof(wbuf));
 
-    /* Mount SD card if needed */
+    /* Mount SD card only if nothing else has already mounted "/SD:".
+     * Zephyr's fs_mount logs "file system already mounted!!" at <err>
+     * whenever a mount struct is re-registered, so we query the live
+     * mount table rather than tracking our own flag. */
     static FATFS fat_fs;
     static struct fs_mount_t mnt = {
         .type = FS_FATFS,
         .fs_data = &fat_fs,
         .mnt_point = "/SD:",
     };
-    int mret = fs_mount(&mnt);
-    if (mret < 0 && mret != -EBUSY) {
-        shell_error(sh, "SD mount failed: %d", mret);
-        return mret;
+    bool already_mounted = false;
+    int idx = 0;
+    const char *mname;
+    while (fs_readmount(&idx, &mname) == 0) {
+        if (strcmp(mname, mnt.mnt_point) == 0) {
+            already_mounted = true;
+            break;
+        }
+    }
+    bool we_mounted = false;
+    if (!already_mounted) {
+        int mret = fs_mount(&mnt);
+        if (mret < 0) {
+            shell_error(sh, "SD mount failed: %d", mret);
+            return mret;
+        }
+        we_mounted = true;
     }
 
     /* Open a test file */
@@ -140,6 +156,15 @@ static int cmd_sd_bench(const struct shell *sh, size_t argc, char **argv)
     fs_close(&fp);
     /* Clean up test file */
     fs_unlink(path);
+
+    /* Only unmount if we were the ones who mounted — leave any pre-existing
+     * owner (e.g. sd_card module) undisturbed. */
+    if (we_mounted) {
+        int uret = fs_unmount(&mnt);
+        if (uret < 0) {
+            shell_warn(sh, "SD unmount returned %d", uret);
+        }
+    }
 
     if (count == 0) {
         shell_print(sh, "No writes completed");
