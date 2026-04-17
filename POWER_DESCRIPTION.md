@@ -1,11 +1,11 @@
-# Power Management Review — OpenEarable v2
+# Power Management — OpenEarable v2
 
 ## Context
 
-This is a **code review / analysis**, not an implementation plan. The user asked for a
-summary of the firmware's power-management strategy and any issues with it, after
-reading Zephyr's PM documentation and walking through `PowerManager.cpp` and the
-device/sensor drivers.
+This started as a **code review / analysis** of the firmware's power-management
+strategy. Most of the §0 "target design" has now been implemented; issues
+called out in §3 that have been resolved are marked with ✅. The document is
+still part description of how things work today, part list of known issues.
 
 Reference reading:
 - Zephyr PM: https://docs.zephyrproject.org/latest/services/pm/index.html
@@ -14,7 +14,7 @@ Reference reading:
 
 ---
 
-## 0. Target design: boot sequence and load-switch lifecycle
+## 0. Boot sequence and load-switch lifecycle (as implemented)
 
 ### Hardware power rails (from schematic)
 
@@ -40,7 +40,7 @@ switch is up.
 | SD card (SDHC on SPI4) | **yes** | — | **yes** | Level-shifter needs V_LS (low) + V_SD (high) |
 | BQ25120A / BQ27220 (I2C1) | — | — | — | Permanent supply |
 
-### Target idle profile
+### Idle profile (as implemented)
 
 "Device on, BLE advertising, no sensors, no SD logging, no audio, no DFU" plus
 a status LED flashing to indicate state:
@@ -49,7 +49,7 @@ a status LED flashing to indicate state:
 - `ls_3_3`: **ON** while LED is active (KTD2026 owns via `_get`/`_put`)
 - `ls_sd`: **OFF** (unless an SD card is physically present → ON)
 
-### Target boot sequence
+### Boot sequence
 
 ```
 T=0   Reset
@@ -77,126 +77,66 @@ T=?   Application kernel init  (mcuboot is gone; no reset; GPIOs intact)
 
 T=?   main() → power_manager.begin()
       ├→ Talks to BQ25120A/BQ27220 on i2c1 (permanent supply — no load switch)
-      ├→ Reads battery, reset reason, button state
+      ├→ Reads reset reason, logs RESETREAS + BQ25120A fault / BQ27220 status
       ├→ Claims ZERO load switches
-      ├→ If bad battery / no button: power_down()  (rails stay off, sys_poweroff)
-      └→ If powering on:
-         ├→ state_indicator.init → KTD2026::begin
-         │  └→ _get(ls_3_3)  → RESUME → gpio HIGH → LED on
-         ├→ SDCardManager::init → reads sd_state GPIO
-         │  └→ if card present: _get(ls_1_8) + _get(ls_sd)
+      ├→ check_battery() — the ONLY gate on booting
+      │  └→ fail: return power_down()  (rails stay off, sys_poweroff)
+      ├→ power_on = true, state_indicator.init → KTD2026::begin
+      │  └→ _get(ls_3_3)  → RESUME → gpio HIGH → LED on
+      ├→ Starts power_button_watch_work (see §8)
+      └→ main() continues:
+         ├→ sdcard_manager.init() → acquires ls_1_8 + ls_sd briefly, probes
+         │    sd_state pin (card-detect needs rails up on this board), keeps
+         │    rails if card present, releases otherwise
+         ├→ disk_access_init("SD") — SD disk initialised while rails are up
+         ├→ usbd_enable — USB MSC LUN points at "SD"
          ├→ Sensors started later (BLE client configures)
          │  └→ sensor.init → _get(ls_1_8) [+ _get(ls_3_3) for some]
          ├→ Audio started later (streaming begins)
          │  └→ dac.begin → _get(ls_1_8)
          └→ DFU (MCUmgr upload over BLE)
-            └→ hook: _get(mx25r64) → cascades via power-domains to _get(ls_1_8)
-               → TURN_ON: spi_nor_configure (JEDEC ID, SFDP, mxicy config)
-               → RESUME: exit DPD → flash ready
-            └→ upload completes: _put(mx25r64) → SUSPEND (enter DPD)
-               → cascades _put(ls_1_8) → if refcount=0, SUSPEND → gpio LOW
+            └→ StateIndicator DFU hook: MGMT_EVT_OP_IMG_MGMT_DFU_STARTED
+                → _get(mx25r64) → cascades via power-domains to _get(ls_1_8)
+                → TURN_ON: spi_nor_configure (JEDEC ID, SFDP, mxicy config)
+                → RESUME: exit DPD → flash ready
+            └→ MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED
+                → _put(mx25r64) → SUSPEND (enter DPD)
+                → cascades _put(ls_1_8) → if refcount=0, SUSPEND → gpio LOW
 ```
 
-### Changes required
+### What was implemented
 
-**DTS — `boards/openearable_v2_nrf5340_cpuapp.overlay`:**
-```dts
-mx25r64: mx25r6435f@1 {
-    ...
-    power-domains = <&load_switch>;        /* NEW: declares V_LS dependency */
-    zephyr,pm-device-runtime-auto;         /* NEW: defer init until first _get */
-};
-```
+- **DTS** (`boards/openearable_v2_nrf5340_cpuapp.overlay`,
+  `.../openearable_v2_nrf5340_cpuapp_common.dts`):
+  - `mx25r64` gets `power-domains = <&load_switch>` + `zephyr,pm-device-runtime-auto`.
+  - All three load-switch nodes get `zephyr,pm-device-runtime-auto`.
+  - The repo-local load-switch binding lives at
+    `boards/teco/openearable_v2/dts/bindings/load-switch.yaml` and includes
+    `#power-domain-cells = <0>` so other devices can declare it as their power domain.
+- **Kconfig** (`prj.conf`): `CONFIG_PM_DEVICE_POWER_DOMAIN=y`.
+- **`KTD2026.cpp`**: no longer claims `ls_1_8`; only `ls_3_3`.
+- **`PowerManager::begin`**: claims no load switches. No per-reset-reason
+  force-boot blocks; `check_battery()` is the only gate (see §2).
+- **`SDCardManager::init`**: presence probe — briefly acquires `ls_1_8` + `ls_sd`,
+  waits 1 ms, checks `sd_state` pin, keeps rails if a card is present, releases
+  otherwise. Card-detect can't read the card unless rails are up (project memory:
+  `project_sd_detect_needs_rails`). `aquire_ls` / `release_ls` only manage
+  `ls_1_8` + `ls_sd`.
+- **`main.cpp`**: calls `sdcard_manager.init()` before `disk_access_init("SD")`
+  so the SD disk probe sees an already-powered card.
+- **MCUmgr DFU hook** (`StateIndicator.cpp`): `MGMT_EVT_OP_IMG_MGMT_DFU_STARTED`
+  calls `pm_device_runtime_get(mx25r64_dev)` and DFU_STOPPED calls the matching
+  `_put`, cascading through power-domains to `ls_1_8`.
 
-**DTS — `openearable_v2_nrf5340_cpuapp_common.dts`** (optional cleanup):
-Add `zephyr,pm-device-runtime-auto;` to all three load-switch nodes, allowing
-the explicit `pm_device_runtime_enable` calls in PowerManager.cpp to be deleted.
+### Why the boot hang was fixed
 
-**Kconfig — `prj.conf`:**
-```
-CONFIG_PM_DEVICE_POWER_DOMAIN=y            /* NEW: enables pm_device_is_powered check */
-```
-
-**`src/drivers/LED_Controller/KTD2026.cpp`:**
-- Delete `pm_device_runtime_get(ls_1_8)` in `begin()` (line 38)
-- Delete `pm_device_runtime_put(ls_1_8)` in `power_off()` (line 58)
-- i2c1 pull-ups are on permanent supply; KTD2026 VIN is on `ls_3_3` only
-
-**`src/Battery/PowerManager.cpp`:**
-- Delete the conditional `pm_device_runtime_enable` + `_get` block inside
-  `if (charging)` in `begin()`.
-- Delete the unconditional enable + `_get` block after `if (!power_on) return
-  power_down()` in `begin()` (all three rails).
-- If `pm-device-runtime-auto` is set in DTS: delete all `pm_device_runtime_enable`
-  calls; they're automatic. Otherwise keep just the three enables, no gets.
-
-**`src/SD_Card/SD_Card_Manager/SD_Card_Manager.cpp`:**
-- `aquire_ls()` / `release_ls()`: claim `ls_1_8` + `ls_sd` only (not `ls_3_3`;
-  SD path doesn't need it per schematic)
-- New: a card-present base claim, separate from mount/unmount. In `init()`,
-  read `sd_state_pin`; if card present, acquire the two rails immediately (so
-  USB MSC can see the card without a FW-side mount). On the state-change ISR
-  debounce handler, add an insertion branch that acquires rails; the existing
-  removal branch releases them.
-- `mount()` / `unmount()` stop calling `aquire_ls()` / `release_ls()`. They
-  just toggle USB MSC and fs_mount state. The card-present claim holds the rails
-  for USB MSC; mount/unmount gate firmware-side filesystem access.
-
-**MCUmgr DFU hook (new code):**
-- Register via `CONFIG_MCUMGR_GRP_IMG_UPLOAD_CHECK_HOOK` (already enabled in
-  prj.conf) or `CONFIG_MCUMGR_SMP_COMMAND_STATUS_HOOKS`.
-- On upload start: `pm_device_runtime_get(DEVICE_DT_GET(DT_NODELABEL(mx25r64)))`.
-  The power-domains cascade handles `ls_1_8`; the spi_nor driver handles chip init
-  (TURN_ON) and DPD exit (RESUME).
-- On upload end: `pm_device_runtime_put(...)`. Driver enters DPD (SUSPEND);
-  if `ls_1_8` refcount drops to 0, load switch goes off.
-
-### Why the boot hang is fixed
-
-The Zephyr `spi_nor` driver's init function (`spi_nor.c:1602`) calls
-`pm_device_driver_init(dev, spi_nor_pm_control)` at line 1635.
-`pm_device_driver_init` (`subsys/pm/device.c:358-395`) immediately checks
-`pm_device_is_powered(dev)`:
-
-```c
-if (!pm_device_is_powered(dev)) {
-    pm_device_init_off(dev);
-    return 0;       /* ← no TURN_ON, no SPI I/O, no hang */
-}
-```
-
-`pm_device_is_powered` (`subsys/pm/device.c:341-356`) returns false when
-`CONFIG_PM_DEVICE_POWER_DOMAIN` is enabled AND the device has a `power-domains`
-parent AND that parent's state is not ACTIVE.
-
-Today the hang happens because `mx25r64` has **no** `power-domains` property and
-`CONFIG_PM_DEVICE_POWER_DOMAIN` is not set, so `pm_device_is_powered` always
-returns true. The driver proceeds to `spi_nor_configure` → `spi_nor_rdsr` reads
-garbage (0xFF) from the unpowered chip → `spi_nor_wait_until_ready` enters an
-**unbounded `while (true)` loop** (`spi_nor.c:479`) that never exits because the
-WIP bit (0x01) appears set in the garbage. Boot hangs before `main()`.
-
-### Verification plan
-
-1. Add the `power-domains` + `pm-device-runtime-auto` to `mx25r64` in DTS,
-   `CONFIG_PM_DEVICE_POWER_DOMAIN=y` in prj.conf. Build. Boot. Confirm device
-   reaches `main()` and PowerManager::begin completes (UART log shows battery
-   info). Confirm `mx25r64` is in OFF state (no SPI NOR traffic on scope/LA).
-
-2. Trigger a DFU upload. Confirm `ls_1_8` comes up (scope on gpio1.11), flash
-   write succeeds, `ls_1_8` goes back down after upload completes.
-
-3. Remove the `pm_device_runtime_get(ls_1_8)` / `pm_device_runtime_get(ls_sd)`
-   from PowerManager::begin. Remove `ls_1_8` from KTD2026. Boot. Confirm:
-   - gpio1.11 LOW after boot (ls_1_8 off)
-   - gpio0.14 HIGH when LED is active (ls_3_3 on)
-   - gpio1.12 LOW (ls_sd off if no card) or HIGH (ls_sd on if card present)
-
-4. Insert SD card. Confirm USB MSC mounts on the host. Remove card. Confirm
-   rails drop. Re-insert. Confirm rails come back and USB MSC works.
-
-5. Start a sensor stream via BLE. Confirm ls_1_8 comes up. Stop the stream.
-   Confirm ls_1_8 goes down (assuming no SD card present).
+The Zephyr `spi_nor` driver's `pm_device_driver_init` checks
+`pm_device_is_powered(dev)`: with `CONFIG_PM_DEVICE_POWER_DOMAIN=y` and a
+`power-domains` parent that's SUSPENDED, it returns false → `pm_device_init_off`
+short-circuits the init before any SPI transaction. Without the power-domain
+linkage the driver would read 0xFF from the unpowered chip and spin forever in
+`spi_nor_wait_until_ready` (unbounded `while (true)` in `spi_nor.c:479`
+because the WIP bit looks set in garbage).
 
 ---
 
@@ -249,9 +189,10 @@ clock or fully off (`sys_poweroff()`).
    ```
    The load switches use `pm_device_runtime_*` for refcounting. `ls_3_3` is the
    3.3 V LDO inside the BQ25120A (DT child of `bq25120a@6a`); `ls_1_8` and `ls_sd`
-   are GPIO load switches on `gpio1.11` / `gpio1.12`. `PowerManager::begin()`
-   `pm_device_runtime_enable`s all three and then `pm_device_runtime_get`s them
-   — see §3.8, §3.9.
+   are GPIO load switches on `gpio1.11` / `gpio1.12`. All three have
+   `zephyr,pm-device-runtime-auto` so runtime PM is enabled automatically and
+   `PowerManager::begin()` doesn't have to touch them — each rail comes up on
+   the first `_get` and drops on the last `_put`.
 
 3. **Application-level sensor/peripheral wrappers**
    Every sensor driver (`IMU.cpp`, `Baro.cpp`, `BoneConduction.cpp`, `PPG.cpp`,
@@ -264,16 +205,22 @@ clock or fully off (`sys_poweroff()`).
    PM action callbacks of their own.
 
 **Power-down sequence (`PowerManager::power_down`):**
-1. Disconnect all BLE connections (`bt_conn_foreach` → `bt_mgmt_conn_disconnect`)
-2. Stop external advertising
-3. `led_controller.begin()` then `power_off()`  ← see §3.3
-4. `stop_sensor_manager()` (drives every sensor's `stop()` → releases load switches)
-5. If not charging: arm BQ25120A and BQ27220 wake interrupts; high-impedance the charger
-6. Stop the BLE watchdog, `dac.end()`, clear error LED
-7. If charging: `sys_reboot()` and return
-8. Otherwise: disable BQ25120A LS_LDO, then `pm_device_action_run(SUSPEND)` on
-   `ls_sd`, `ls_3_3`, `ls_1_8`, `cons` (the UART console)
-9. `sys_poweroff()`; fallback `k_msleep(1000); sys_reboot()`
+
+`reboot()` and `power_down()` share a `shutdown_subsystems()` helper that:
+disconnects BLE peers, stops external advertising, stops the sensor manager,
+stops the BT watchdog, and ends the DAC. From there:
+
+1. `shutdown_subsystems()` (shared with `reboot()`)
+2. `led_controller.power_off()`
+3. If not charging: arm BQ25120A PG as the System-OFF wake source, high-impedance the charger
+4. `k_msleep(200)` to let BT disconnects propagate, then `bt_disable()` (on nRF5340
+   this also forces the netcore off via `bt_hci_transport_teardown`)
+5. Clear error LED
+6. If charging: `sys_reboot(COLD)` and return
+7. Otherwise: disable BQ25120A `EN_LS_LDO`, then `pm_device_action_run(SUSPEND)` on
+   `ls_sd`, `ls_3_3`, `ls_1_8`, and `cons` (the UART console)
+8. `poweroff audit` log line (rail pins, `EN_LS_LDO`, `pmic_cd`, `netcore_off`)
+9. `sys_poweroff()`; fallback `k_msleep(1000); sys_reboot(COLD)`
 
 **Sensor pattern (typical):**
 ```cpp
@@ -321,48 +268,28 @@ likely running, and the I²C peripheral blocks (see 3.6) are powered. There is n
 policy callback, no `pm_state_force()`, no constraint API usage. The "low power" path
 is jump-straight-to-`sys_poweroff()`.
 
-#### 3.3 `power_down` re-initialises the LED controller before turning it off
-Inside `power_down()`:
-```cpp
-led_controller.begin();
-led_controller.power_off();
-```
-`KTD2026::begin()` calls `pm_device_runtime_get(ls_1_8)` +
-`pm_device_runtime_get(ls_3_3)`, sleeps 10 ms, talks to the chip, and resets it.
-`power_off()` then writes the mute register and `_put`s both rails. So if the LED was
-already off (`_active=false`), this path turns ls_3_3 on, talks to the chip, then turns
-it back off — pure waste during a shutdown that's already racing the user's button.
-If the LED was on, `begin()` is short-circuited by `if (_active) return;` — but the
-fact that this whole block is unconditional makes it look like a copy/paste bug.
-Almost certainly a regression and should just be deleted.
+#### 3.3 `power_down` re-initialises the LED controller before turning it off ✅ RESOLVED
+`power_down()` now just calls `led_controller.power_off()` — the spurious
+`led_controller.begin()` is gone.
 
 #### 3.4 Sensors don't actually sleep before their rail is cut
-The "graceful shutdown before pm_device_runtime_put" pattern is implemented
-inconsistently:
+Current state:
 
 | Sensor          | Driver               | Pre-cut shutdown                          |
 |-----------------|----------------------|-------------------------------------------|
-| BMX160 (IMU)    | `IMU.cpp:99-112`     | `imu.softReset()` only — comment `// turn off imu (?)`. Suspend mode regs (0x10/0x14/0x18) NOT used |
-| BMP388 (Baro)   | `Baro.cpp:111-121`   | **Nothing** — direct `pm_device_runtime_put` |
+| BMX160 (IMU)    | `IMU.cpp:99-112`     | `imu.softReset()` only. Suspend mode regs (0x10/0x14/0x18) NOT used |
+| BMP388 (Baro)   | `Baro.cpp`           | ✅ `bmp.sleep()` now sets `BMP3_MODE_SLEEP` before the `_put` |
 | BMA580 (Bone)   | `BoneConduction.cpp:140-153` | `bma580.stop()` (sets BMA5_REG_CMD_SUSPEND) ✓ |
 | MAXM86161 (PPG) | `PPG.cpp:156-169`    | `ppg.stop()` (REG_SYSTEM_CONTROL shutdown bit) ✓ |
 | MLX90632 (Temp) | `Temp.cpp`           | `temp.sleepMode()` ✓ |
 
-For BMP388 and BMX160 the rail is hard-cut while the chip is still in active mode.
-This is suboptimal for the IC and — more importantly — it leaves the I²C lines
-floating from the device's perspective for a moment, which is a credible suspect
-for the **i2c3 sensor-dropout regression** described in `PROBLEMS.md`. (BMP388,
-BMA580, MLX90632 are exactly the i2c3 sensors that drop out; BMX160 is on the same
-bus but is the only one mentioned as still working — which is curious.)
+BMX160 still has no explicit suspend. The i2c3 dropout regression may still
+be at least partly downstream of this.
 
-#### 3.5 PPG manually drives a GPIO LDO that is never released
-`PPG.cpp:35-45` constructs a `gpio_dt_spec` for `gpio0.6` and asserts it as the PPG
-LDO enable, then sleeps 5 ms. There is **no matching teardown** in `PPG::stop()` — the
-GPIO stays HIGH for the rest of the device's lifetime, leaving an external LDO
-enabled even when PPG is idle. This same block also leaks the `ls_1_8`/`ls_3_3`
-refcounts on the error path: `gpio_pin_configure_dt` failing returns `false` after
-the two `pm_device_runtime_get` calls, without putting either back, and without
-setting `_active=true` so a later `stop()` can't recover them.
+#### 3.5 PPG manually drives a GPIO LDO that is never released ✅ RESOLVED
+`PPG.cpp` now hoists the LDO `gpio_dt_spec` to file scope and clears it in both
+`init()`'s error path and `stop()` — the LDO is dropped before `ls_1_8`/`ls_3_3`
+are released, and the refcount leak on the init error path is fixed.
 
 #### 3.6 I²C buses are never gated
 `i2c1`, `i2c2`, `i2c3` all have `status = "okay"` and define both `default` and
@@ -380,36 +307,23 @@ they're `compatible = "i2c-device"` and have no driver/PM callback, the load-swi
 refcount and the sensor's "active" state are coordinated only by the C++ wrappers.
 Easy to leak (see 3.5) and easy to introduce ordering bugs.
 
-#### 3.8 `ls_1_8` and `ls_sd` are pinned on for the device's entire lifetime
-`PowerManager::begin()` does `pm_device_runtime_get(ls_1_8)` +
-`pm_device_runtime_get(ls_3_3)` + `pm_device_runtime_get(ls_sd)` at the bottom
-of the init path (and again, conditionally, on the charging-at-boot branch).
-The matching `_put`s only happen inside `power_down()`. So even when nothing is
-streaming and no SD I/O is happening, all three rails stay on. This makes
-`SDCardManager::aquire_ls`/`release_ls` (which carefully refcounts all three
-rails for mount/unmount) a no-op in practice — the floor on each rail is ≥1.
+#### 3.8 `ls_1_8` and `ls_sd` are pinned on for the device's entire lifetime ✅ RESOLVED
+`PowerManager::begin()` no longer claims any load switches. `SDCardManager`
+owns `ls_1_8` + `ls_sd` for the card-present duration only; when the card is
+removed the rails drop.
 
-#### 3.9 Begin-time load-switch enablement is duplicated and order-sensitive
-`PowerManager::begin()` enables all three load switches on the non-charging
-path, and separately enables them inside the `if (charging)` branch — which
-runs *before* the main-path enable block. On the charging path the first
-`pm_device_runtime_enable(ls_3_3)` happens before `state_indicator.init` calls
-`KTD2026::begin()` (which claims ls_3_3). On the non-charging path, the
-comment at the enable block notes "With `pm_device_init_suspended()` in
-board_init, `_enable` is a no-op (no glitch)." — which implies there was a
-glitch concern. The whole duplication goes away if `zephyr,pm-device-runtime-auto`
-is added to the load-switch DTS nodes (see §0 "Changes required" and §3.13).
+#### 3.9 Begin-time load-switch enablement is duplicated and order-sensitive ✅ RESOLVED
+Gone — all three load-switch DT nodes have `zephyr,pm-device-runtime-auto`,
+so there's no explicit `pm_device_runtime_enable` in `begin()` at all.
 
 ### Medium
 
 #### 3.10 `power_down` ordering: sensors are stopped before BLE is disconnected
-`power_down()` sequence: `bt_conn_foreach` → disconnect, `bt_mgmt_ext_adv_stop`,
-LED off, `stop_sensor_manager()`. But `bt_conn_disconnect` is asynchronous — by
-the time we get to `stop_sensor_manager()`, peer disconnect events may not have
-completed. We then `dac.end()` and stop the watchdog while BLE is still tearing
-down. Re-ordering the audio/sensor teardown to *after* BLE has fully torn down
-would be safer, and would also let us actually call `bt_disable()` once the
-underlying ISO/audio paths are released.
+`shutdown_subsystems()` still runs disconnect → ext-adv-stop →
+`stop_sensor_manager()` → stop-watchdog → `dac.end()` without waiting for the
+async disconnect events. The 200 ms sleep before `bt_disable()` is the
+existing buffer; re-ordering so audio/sensor teardown happens after BLE
+teardown is still a latent improvement.
 
 #### 3.11 The `DEBOUNCE_POWER_MS = K_MSEC(1000)` constant is unused at the place that needs it
 `PowerManager.h` defines it, but `power_good_callback` schedules
@@ -426,10 +340,9 @@ the TS path, but everything else requires a user power-cycle.
 
 ### Low / code-quality
 
-#### 3.13 No `zephyr,pm-device-runtime-auto` on the load-switch nodes
-Adding it to `load_switch`, `load_switch_sd`, and the BQ25120A child `load-switch`
-in `*.dts:26-123` would let us delete the explicit `pm_device_runtime_enable`
-plumbing in `PowerManager::begin()`.
+#### 3.13 No `zephyr,pm-device-runtime-auto` on the load-switch nodes ✅ RESOLVED
+All three load-switch nodes now have the attribute; `PowerManager::begin()`
+doesn't need to enable any of them.
 
 #### 3.14 Synchronous `pm_device_runtime_put` everywhere
 Some shutdown paths (especially PPG, which talks to the chip) could use
@@ -471,57 +384,36 @@ it's the root cause of half the issues above.
 
 ---
 
-## 5. Suggested next steps (in priority order)
+## 5. Next steps
 
-**Phase 1 — Unblock the target design (§0)**
+**Done (Phase 1 of the original plan):**
 
-1. **DTS + Kconfig: wire mx25r64 into power-domains.** Add
-   `power-domains = <&load_switch>;` and `zephyr,pm-device-runtime-auto;` to the
-   `mx25r64` node in `boards/openearable_v2_nrf5340_cpuapp.overlay`. Add
-   `CONFIG_PM_DEVICE_POWER_DOMAIN=y` to `prj.conf`. This eliminates the boot hang
-   that currently forces `ls_1_8` to be always-on (see §0 "Why the boot hang is
-   fixed"). **Verify on-device that the board boots to `main()` with `ls_1_8` off.**
+1. ✅ DTS + Kconfig: `mx25r64` wired into `power-domains`; `CONFIG_PM_DEVICE_POWER_DOMAIN=y`.
+2. ✅ KTD2026 claims only `ls_3_3`.
+3. ✅ `PowerManager::begin` claims no load switches; all three have `zephyr,pm-device-runtime-auto`.
+4. ✅ `SDCardManager`: presence probe in `init()`, rails held only while card is inserted.
+5. ✅ MCUmgr DFU hook gets/puts `mx25r64`.
+6. ✅ `power_down()`: spurious `led_controller.begin()` removed.
+7. ✅ `PPG` GPIO LDO released in `stop()` and the init error path.
+8. ✅ BMP388 `sleep()` call before rail cut.
+9. ✅ `PowerManager::begin` simplified: no per-reset-reason force-boot gymnastics,
+    `check_battery()` is the only gate (see §9 for why).
+10. ✅ Power-button state machine that waits for a post-boot release before
+     acting on BQ25120A WAKE events (see §8).
+11. ✅ USB-plug-while-running triggers a clean `reboot()` so MSC comes up via
+     the known-good cold-boot path (see §9).
+12. ✅ `reboot()` and `power_down()` share `shutdown_subsystems()`.
 
-2. **Remove KTD2026's unnecessary `ls_1_8` claim** (`KTD2026.cpp:38, 58`). LED
-   controller is on i2c1 (permanent pull-ups per schematic); it only needs `ls_3_3`.
+**Remaining:**
 
-3. **PowerManager::begin claims zero load switches.** Delete both enable blocks
-   in `begin()` (the conditional one inside `if (charging)` and the unconditional
-   one after `if (!power_on) return power_down()`), plus their
-   `pm_device_runtime_get(ls_1_8)` / `pm_device_runtime_get(ls_3_3)` /
-   `pm_device_runtime_get(ls_sd)` calls. Add `zephyr,pm-device-runtime-auto;` to
-   the three load-switch DTS nodes so enable is automatic. Or keep explicit
-   `pm_device_runtime_enable` calls but NO `_get`.
-
-4. **SDCardManager: presence-based rail ownership.** `init()` reads `sd_state_pin`;
-   if card present, `_get(ls_1_8)` + `_get(ls_sd)`. State-change ISR debounce
-   handler gains an insertion branch that `_get`s, matching the existing removal
-   branch that `_put`s. `mount()`/`unmount()` stop calling `aquire_ls`/`release_ls`
-   — they just toggle USB MSC and `fs_mount`. `aquire_ls` drops `ls_3_3` (SD card
-   doesn't need it per schematic). **Re-test USB MSC mount/unmount with card
-   insert/remove.**
-
-5. **MCUmgr DFU hook.** Register via the existing
-   `CONFIG_MCUMGR_GRP_IMG_UPLOAD_CHECK_HOOK`. On upload start:
-   `pm_device_runtime_get(mx25r64_dev)` (cascades to `ls_1_8` via power-domains).
-   On upload end: `pm_device_runtime_put(mx25r64_dev)`.
-
-**Phase 2 — Fix existing issues (§3)**
-
-6. **Delete the spurious `led_controller.begin()` call in `power_down()`** (§3.3)
-   and verify shutdown still works.
-7. **Add proper sleep modes to BMX160 and BMP388** (`IMU::stop()` and
-   `Baro::stop()`) before `pm_device_runtime_put`. Then re-test the i2c3 dropout
-   regression. (§3.4)
-8. **Fix the PPG GPIO LDO leak** (release `gpio0.6` in `PPG::stop()`; fix the
-   error path in `PPG::init()`). (§3.5)
-9. **`git diff` `BQ25120a.cpp`** against the last known-good firmware for the
-   button-hold-time register change. (§4 / 12 s power-on)
-
-**Phase 3 — Stretch goals**
-
-10. **Convert sensors to real Zephyr drivers** with PM action callbacks and
-    `power-domains` pointing at load switches (§3.15).
+- **BMX160 suspend** — `IMU::stop()` still only calls `softReset`; proper
+  suspend-mode register writes would better match the other sensors (§3.4).
+- **Root-cause USB MSC mid-run failure** — the `reboot()` in §9 is a pragmatic
+  fix; the underlying race between running system state and USB MSC attaching
+  to the SD disk is not understood (see §10).
+- **Consider converting sensors to real Zephyr drivers** with PM action
+  callbacks and `power-domains` (§3.15). Big refactor; would eliminate several
+  categories of manual refcount bugs.
 
 ---
 
@@ -609,29 +501,105 @@ side-effecting hairball in the switch.
 
 Both print overlapping battery snapshots in slightly different formats. Not
 consolidated; a shared formatter taking a `printk`/`shell_print` callback is the
-natural next step if fields need to be added.
+natural next step if fields need to be added. `cmd_battery_info` also prints
+the four load-switch pin states (`ls_1_8`, `ls_3_3`, `ls_sd`, PPG LDO) plus
+the BQ25120A `EN_LS_LDO` bit.
 
 ---
 
-## 7. Files referenced
+## 8. Power-button state machine
+
+`PowerManager::begin()` no longer gates boot on BQ25120A button/wake register
+bits. The only boot gate is `check_battery()`. The button state machine is a
+post-boot polling loop:
+
+```
+member: first_release_seen = false      // set once the button is first released
+
+begin() schedules power_button_watch_work with K_MSEC(100)
+power_button_watch_handler (k_work_delayable):
+    if earable_btn.getState() == BUTTON_RELEASED:
+        first_release_seen = true        // consume the power-on press
+        return                           // stops polling
+    else:
+        reschedule(K_MSEC(100))
+
+battery_controller_work_handler (BQ25120A INT → work):
+    read button register
+    if state.wake_2 && first_release_seen:
+        power_on = !power_on
+        if (!power_on) power_down()
+```
+
+Result: the user can hold the button until they see the desired state change,
+release, and that's it. The toggle on WAKE_2 fires immediately (state change is
+visible while the button is still held); the `first_release_seen` flag makes
+sure the initial power-on press isn't mis-read as an immediate power-off
+toggle.
+
+---
+
+## 9. Reset-reason handling and USB-plug reboot
+
+`begin()` reads `RESETREAS` for **diagnostics only** — it logs the bits and
+records `oe_boot_state.timer_reset` on `RESETPIN` wakes (the BQ25120A timer
+reset vs a programmer nRESET is still useful downstream) — but the reset
+reason does not gate boot. Historically there were four separate
+`if (reset_reas & X) power_on = true` blocks plus a charge-wait loop; all gone.
+
+USB-plug while the device is already running is handled by triggering a
+graceful reboot instead of trying to bring USB MSC up against running app
+state:
+
+```cpp
+// power_good_callback (GPIO ISR on BQ25120A PG):
+if (power_good && power_manager.power_on) {
+    k_work_submit(&usb_plug_reboot_work);   // handler calls power_manager.reboot()
+}
+```
+
+This ensures the device always comes up via the cold-boot-with-USB path, which
+is known to cleanly enumerate the SD card over MSC. On VBUS-wake from
+System OFF, the new boot just proceeds normally (no special handling needed).
+
+---
+
+## 10. Known limitation: USB MSC while device is running
+
+`sd_bench` (firmware-side disk access) works reliably with the rails up, but
+host-initiated READ(10) requests over USB MSC time out with `DID_ERROR
+cmd_age=3s` when USB is plugged into a running device. INQUIRY / READ_CAPACITY
+(served from cached `sd_card` fields, no SPI transaction) respond fine; the
+failure is specifically on data reads. Root cause not nailed down — suspected
+thread/priority contention between the USBD stack and whatever the app is
+doing when the host tries to read. Worked around by rebooting on USB plug (§9),
+which puts us into the cold-boot path that works end-to-end.
+
+---
+
+## 11. Files referenced
 
 | File | Notes |
 |------|-------|
-| `src/Battery/PowerManager.h` | Class definition; `DEBOUNCE_POWER_MS`; battery_settings constants |
-| `src/Battery/PowerManager.cpp` | `begin`, `power_down`, work handlers, shell commands; most of §3 lives here |
+| `src/Battery/PowerManager.h` | Class definition; power-button / USB-plug work items; `first_release_seen` flag |
+| `src/Battery/PowerManager.cpp` | Simplified `begin`, unified `power_down`/`reboot` via `shutdown_subsystems`, `power_button_watch_handler`, `usb_plug_reboot_handler`, fault-log with CTRL/FAULT/TS_FAULT raw bytes |
 | `src/Battery/BQ25120a.{cpp,h}` | Charger; HiZ + `ActiveScope`, `ChargePhase`, `fault_bits`; button-hold-time registers (0x08) are not written, see §4 / 12 s power-on |
 | `src/Battery/BQ27220.{cpp,h}` | Fuel gauge; wakeup interrupts |
 | `boards/teco/openearable_v2/board_init.c` | Custom load-switch PM devices |
-| `boards/teco/openearable_v2/openearable_v2_nrf5340_cpuapp_common.dts` | I²C/load-switch nodes; missing pm-device-runtime-auto |
-| `src/SensorManager/IMU.cpp` | softReset only; no suspend mode |
-| `src/SensorManager/Baro.cpp` | No pre-cut shutdown |
+| `boards/teco/openearable_v2/openearable_v2_nrf5340_cpuapp_common.dts` | I²C/load-switch nodes; all three load switches carry `zephyr,pm-device-runtime-auto` |
+| `boards/openearable_v2_nrf5340_cpuapp.overlay` | `mx25r64` carries `power-domains = <&load_switch>` + `zephyr,pm-device-runtime-auto` |
+| `boards/teco/openearable_v2/dts/bindings/load-switch.yaml` | Repo-local load-switch binding; `#power-domain-cells = <0>` |
+| `src/SensorManager/IMU.cpp` | softReset only; still no explicit suspend mode |
+| `src/SensorManager/Baro.cpp` | `bmp.sleep()` before pm_device_runtime_put |
 | `src/SensorManager/BoneConduction.cpp` | OK; calls bma580.stop() |
-| `src/SensorManager/PPG.cpp` | GPIO LDO leak; error-path refcount leak |
+| `src/SensorManager/PPG.cpp` | GPIO LDO released in `stop()` and error path |
 | `src/SensorManager/Temp.cpp` | OK; calls sleepMode() |
 | `src/SensorManager/SensorManager.cpp` | `stop_sensor_manager` calls every `.stop()` |
-| `src/drivers/LED_Controller/KTD2026.cpp` | begin/power_off pair, called weirdly from power_down |
+| `src/drivers/LED_Controller/KTD2026.cpp` | claims only `ls_3_3` |
 | `src/drivers/ADAU1860.cpp` | Audio codec PM |
-| `src/SD_Card/SD_Card_Manager/SD_Card_Manager.cpp` | aquire_ls/release_ls (defeated by §3.8) |
-| `prj.conf` | CONFIG_PM*, CONFIG_POWEROFF |
+| `src/SD_Card/SD_Card_Manager/SD_Card_Manager.cpp` | Presence probe in `init()`; `aquire_ls`/`release_ls` manage only `ls_1_8` + `ls_sd` |
+| `src/main.cpp` | `sdcard_manager.init()` before `disk_access_init("SD")` |
+| `src/utils/StateIndicator.cpp` | MCUmgr DFU hook: `get`/`put` on `mx25r64` |
+| `prj.conf` | CONFIG_PM*, CONFIG_PM_DEVICE_POWER_DOMAIN, CONFIG_POWEROFF |
 | `PROBLEMS.md` | Reported regressions (sensor dropout, 12 s power-on, BC data loss) |
 | `SYSTEM_DESCRIPTION.md` | I²C topology, BMP388/BMX160/MLX90632 optimisation notes |
