@@ -67,7 +67,8 @@ int main(void) {
 		/* Bring SD rails up (if a card is present) before disk probe and USB
 		 * enable so MSC sees the card on first host poll. */
 		sdcard_manager.init();
-		disk_access_init("SD");
+		ret = disk_access_init("SD");
+		LOG_INF("disk_access_init(SD)=%d", ret);
 
 		g_usbd = sample_usbd_init_device(NULL);
 		if (g_usbd == NULL) {
