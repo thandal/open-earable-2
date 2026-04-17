@@ -277,14 +277,13 @@ Current state:
 
 | Sensor          | Driver               | Pre-cut shutdown                          |
 |-----------------|----------------------|-------------------------------------------|
-| BMX160 (IMU)    | `IMU.cpp:99-112`     | `imu.softReset()` only. Suspend mode regs (0x10/0x14/0x18) NOT used |
+| BMX160 (IMU)    | `IMU.cpp:149-171`    | ✅ `imu.stop()` parks accel+gyro in `BMI160_*_SUSPEND_MODE` via `bmi160_set_sens_conf` |
 | BMP388 (Baro)   | `Baro.cpp`           | ✅ `bmp.sleep()` now sets `BMP3_MODE_SLEEP` before the `_put` |
 | BMA580 (Bone)   | `BoneConduction.cpp:140-153` | `bma580.stop()` (sets BMA5_REG_CMD_SUSPEND) ✓ |
 | MAXM86161 (PPG) | `PPG.cpp:156-169`    | `ppg.stop()` (REG_SYSTEM_CONTROL shutdown bit) ✓ |
 | MLX90632 (Temp) | `Temp.cpp`           | `temp.sleepMode()` ✓ |
 
-BMX160 still has no explicit suspend. The i2c3 dropout regression may still
-be at least partly downstream of this.
+All sensors now quiesce before their rail drops.
 
 #### 3.5 PPG manually drives a GPIO LDO that is never released ✅ RESOLVED
 `PPG.cpp` now hoists the LDO `gpio_dt_spec` to file scope and clears it in both
@@ -363,11 +362,10 @@ it's the root cause of half the issues above.
 
 `PROBLEMS.md` lists three live regressions. Possible links:
 
-1. **i2c3 sensor dropouts (temp, baro, bone)** — best candidates are §3.4 (BMP388
-   has zero pre-cut shutdown; BMA580's stop is fine; the temperature one *does* call
-   `sleepMode`) and §3.9 (load-switch enable ordering). The IMU still working
-   *despite* being on the same bus and rail is the most diagnostic clue: it's the
-   one that calls `softReset` (which is more disruptive than nothing).
+1. **i2c3 sensor dropouts (temp, baro, bone)** — §3.4 is now closed (all
+   sensors quiesce before their rail drops) and §3.9 is resolved, so the
+   remaining suspects for this regression are bus-level (i2c controller never
+   gated, §3.6) or ordering issues during re-acquire, not per-sensor shutdown.
 
 2. **12 s power-on press** — most likely a BQ25120A button-hold-time register
    change. The `Push-button Control` register is 0x08; bits `MRRESET[1:0]` set
@@ -403,11 +401,10 @@ it's the root cause of half the issues above.
 11. ✅ USB-plug-while-running triggers a clean `reboot()` so MSC comes up via
      the known-good cold-boot path (see §9).
 12. ✅ `reboot()` and `power_down()` share `shutdown_subsystems()`.
+13. ✅ BMX160 `IMU::stop()` parks accel+gyro in suspend mode before the rail drops.
 
 **Remaining:**
 
-- **BMX160 suspend** — `IMU::stop()` still only calls `softReset`; proper
-  suspend-mode register writes would better match the other sensors (§3.4).
 - **Root-cause USB MSC mid-run failure** — the `reboot()` in §9 is a pragmatic
   fix; the underlying race between running system state and USB MSC attaching
   to the SD disk is not understood (see §10).
@@ -589,7 +586,7 @@ which puts us into the cold-boot path that works end-to-end.
 | `boards/teco/openearable_v2/openearable_v2_nrf5340_cpuapp_common.dts` | I²C/load-switch nodes; all three load switches carry `zephyr,pm-device-runtime-auto` |
 | `boards/openearable_v2_nrf5340_cpuapp.overlay` | `mx25r64` carries `power-domains = <&load_switch>` + `zephyr,pm-device-runtime-auto` |
 | `boards/teco/openearable_v2/dts/bindings/load-switch.yaml` | Repo-local load-switch binding; `#power-domain-cells = <0>` |
-| `src/SensorManager/IMU.cpp` | softReset only; still no explicit suspend mode |
+| `src/SensorManager/IMU.cpp` | `imu.stop()` parks accel+gyro in BMI160 suspend mode before `_put(ls_1_8)` |
 | `src/SensorManager/Baro.cpp` | `bmp.sleep()` before pm_device_runtime_put |
 | `src/SensorManager/BoneConduction.cpp` | OK; calls bma580.stop() |
 | `src/SensorManager/PPG.cpp` | GPIO LDO released in `stop()` and error path |
