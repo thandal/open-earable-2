@@ -174,9 +174,11 @@ void PowerManager::fuel_gauge_work_handler(struct k_work * work) {
     }
 
     uint8_t ts_fault = 0;
+    uint8_t ctrl_raw = 0;
     {
         BQ25120a::ActiveScope active(battery_controller);
-        snap.phase = battery_controller.read_charge_phase();
+        ctrl_raw = battery_controller.read_charging_state();
+        snap.phase = static_cast<BQ25120a::ChargePhase>(ctrl_raw >> 6);
         snap.power_connected = battery_controller.power_connected();
         if (snap.phase == BQ25120a::ChargePhase::Fault) {
             snap.fault = battery_controller.read_fault();
@@ -203,7 +205,8 @@ void PowerManager::fuel_gauge_work_handler(struct k_work * work) {
             LOG_INF("charging state: done");
             break;
         case BQ25120a::ChargePhase::Fault:
-            LOG_WRN("charging state: fault");
+            LOG_WRN("charging state: fault (CTRL=0x%02x FAULT=0x%02x TS_FAULT=0x%02x)",
+                    ctrl_raw, snap.fault, ts_fault);
             for (const auto &b : BQ25120a::fault_bits) {
                 if (snap.fault & b.mask) LOG_WRN("%s", b.name);
             }
@@ -258,9 +261,37 @@ int PowerManager::begin() {
     // get reset reason
     uint32_t reset_reas = NRF_RESET->RESETREAS;
 
+    // Boot diagnostics: decode RESETREAS and snapshot PMIC fault / fuel-gauge
+    // status so spurious wakes from System OFF can be traced to a specific
+    // line (BQ25120A PG/INT or BQ27220 GPOUT). OFF (bit 16) set means the
+    // SoC woke from System OFF via pin sense — i.e. one of the armed PMIC
+    // wake lines fired, not a user button reset.
+    {
+        uint8_t bq_fault    = battery_controller.read_fault();
+        uint8_t bq_ts_fault = battery_controller.read_ts_fault();
+        bat_status fg       = fuel_gauge.battery_status();
+        LOG_WRN("boot: RESETREAS=0x%08x [%s%s%s%s%s%s%s%s%s]",
+                reset_reas,
+                (reset_reas & RESET_RESETREAS_RESETPIN_Msk) ? "PIN "  : "",
+                (reset_reas & RESET_RESETREAS_DOG0_Msk)     ? "DOG0 " : "",
+                (reset_reas & RESET_RESETREAS_CTRLAP_Msk)   ? "CAP "  : "",
+                (reset_reas & RESET_RESETREAS_SREQ_Msk)     ? "SREQ " : "",
+                (reset_reas & RESET_RESETREAS_LOCKUP_Msk)   ? "LOCK " : "",
+                (reset_reas & RESET_RESETREAS_OFF_Msk)      ? "OFF "  : "",
+                (reset_reas & RESET_RESETREAS_LPCOMP_Msk)   ? "LPC "  : "",
+                (reset_reas & RESET_RESETREAS_NFC_Msk)      ? "NFC "  : "",
+                (reset_reas & RESET_RESETREAS_VBUS_Msk)     ? "VBUS " : "");
+        LOG_WRN("boot: BQ25120A fault=0x%02x ts_fault=0x%02x  "
+                "BQ27220 DSG=%u SYSDWN=%u BATTPRES=%u FC=%u FD=%u "
+                "OTC=%u OTD=%u TCA=%u TDA=%u",
+                bq_fault, bq_ts_fault,
+                fg.DSG, fg.SYSDWN, fg.BATTPRES, fg.FC, fg.FD,
+                fg.OTC, fg.OTD, fg.TCA, fg.TDA);
+    }
+
     // reset the reset reason
     NRF_RESET->RESETREAS = 0xFFFFFFFF;
-    
+
     if (reset_reas & RESET_RESETREAS_RESETPIN_Msk) {
         oe_boot_state.timer_reset = bat_state & (1 << 4);
         power_on |= oe_boot_state.timer_reset;
