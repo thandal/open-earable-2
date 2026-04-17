@@ -22,7 +22,7 @@ public:
     SDCardManager();
     ~SDCardManager();
 
-    int aquire_ls();
+    int acquire_ls();
     int release_ls();
 
     void init();
@@ -191,7 +191,7 @@ private:
 
     static void unmount_work_handler(struct k_work *work);
 
-    bool ls_aquired = false;
+    bool ls_acquired = false;
 
     bool sd_inserted();
 

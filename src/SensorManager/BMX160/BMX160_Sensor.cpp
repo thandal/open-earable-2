@@ -47,7 +47,7 @@ static TWIM * s_i2c = &I2C3;
 static int8_t bmi160_i2c_read(uint8_t dev_addr, uint8_t reg_addr,
                               uint8_t *data, uint16_t len)
 {
-    s_i2c->aquire();
+    s_i2c->acquire();
     int ret = i2c_burst_read(s_i2c->master, dev_addr, reg_addr, data, len);
     s_i2c->release();
     if (ret) {
@@ -61,7 +61,7 @@ static int8_t bmi160_i2c_read(uint8_t dev_addr, uint8_t reg_addr,
 static int8_t bmi160_i2c_write(uint8_t dev_addr, uint8_t reg_addr,
                                uint8_t *data, uint16_t len)
 {
-    s_i2c->aquire();
+    s_i2c->acquire();
     int ret = i2c_burst_write(s_i2c->master, dev_addr, reg_addr, data, len);
     s_i2c->release();
     if (ret) {

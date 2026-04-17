@@ -254,7 +254,7 @@ int MAXM86161::set_ppg_tint(int time)
 int MAXM86161::_read_from_reg(int address, int &data) {
     int ret;
 
-    _i2c->aquire();
+    _i2c->acquire();
 
     uint8_t buffer;
     ret = i2c_burst_read(_i2c->master, _addr, address, &buffer, sizeof(buffer));
@@ -268,7 +268,7 @@ int MAXM86161::_read_from_reg(int address, int &data) {
 
 int MAXM86161::_write_to_reg(int address, int value) {
 
-    _i2c->aquire();
+    _i2c->acquire();
 
     uint8_t buffer = value;
     int ret = i2c_burst_write(_i2c->master, _addr, address, &buffer, sizeof(buffer));
@@ -284,7 +284,7 @@ int MAXM86161::_read_block(int address, int length, uint8_t *data)
 {
     int ret;
 
-    _i2c->aquire();
+    _i2c->acquire();
 
     ret = i2c_burst_read(_i2c->master, _addr, address, data, length);
     if (ret) LOG_WRN("I2C read failed: %d\n", ret);

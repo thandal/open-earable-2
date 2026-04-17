@@ -61,7 +61,7 @@ BMA5_INTF_RET_TYPE bma5_i2c_read(uint8_t reg_addr, uint8_t *reg_data, uint32_t l
     int ret;
     BMA580_dev_inf * dev_info = (BMA580_dev_inf *) intf_ptr;
 
-    dev_info->i2c_dev->aquire();
+    dev_info->i2c_dev->acquire();
 
     ret = i2c_burst_read(dev_info->i2c_dev->master, dev_info->addr, reg_addr, reg_data, len);
     if (ret) LOG_WRN("I2C read failed: %d\n", ret);
@@ -77,7 +77,7 @@ BMA5_INTF_RET_TYPE bma5_i2c_write(uint8_t reg_addr, const uint8_t *reg_data, uin
 {
     BMA580_dev_inf * dev_info = (BMA580_dev_inf *) intf_ptr; 
 
-    dev_info->i2c_dev->aquire();
+    dev_info->i2c_dev->acquire();
     
     int ret = i2c_burst_write(dev_info->i2c_dev->master, dev_info->addr, reg_addr, reg_data, len);
     if (ret) LOG_WRN("I2C write failed: %d", ret);

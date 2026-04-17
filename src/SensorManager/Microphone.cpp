@@ -55,7 +55,7 @@ void Microphone::start(int sample_rate_idx) {
 
 	record_to_sd(true);
 
-	audio_datapath_aquire(&fifo_rx);
+	audio_datapath_acquire(&fifo_rx);
 
 	_running = true;
 }

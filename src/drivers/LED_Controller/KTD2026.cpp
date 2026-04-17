@@ -9,7 +9,7 @@
 LOG_MODULE_REGISTER(LED, CONFIG_MAIN_LOG_LEVEL);
 
 bool KTD2026::readReg(uint8_t reg, uint8_t * buffer, uint16_t len) {
-        _i2c->aquire();
+        _i2c->acquire();
 
         int ret = i2c_burst_read(_i2c->master, address, reg, buffer, len);
         if (ret) LOG_WRN("I2C read failed: %d\n", ret);
@@ -20,7 +20,7 @@ bool KTD2026::readReg(uint8_t reg, uint8_t * buffer, uint16_t len) {
 }
 
 void KTD2026::writeReg(uint8_t reg, uint8_t *buffer, uint16_t len) {
-        _i2c->aquire();
+        _i2c->acquire();
 
         int ret = i2c_burst_write(_i2c->master, address, reg, buffer, len);
         if (ret) LOG_WRN("I2C write reg 0x%02x failed: %d", reg, ret);
@@ -55,7 +55,7 @@ void KTD2026::reset() {
          * We issue the command anyway so true cold power cycles (battery
          * disconnect, or sys_poweroff→wake which disables the LS/LDO) still
          * get the datasheet-recommended sequence, and log the NACK at DBG. */
-        _i2c->aquire();
+        _i2c->acquire();
         uint8_t val = 0x7;
         int ret = i2c_burst_write(_i2c->master, address, registers::CTRL, &val, sizeof(val));
         _i2c->release();

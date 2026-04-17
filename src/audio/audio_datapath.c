@@ -1188,7 +1188,7 @@ int audio_datapath_stop(void)
 }
 
 // TODO: not clean with the argument --> move to init?
-int audio_datapath_aquire(struct data_fifo *fifo_rx) {
+int audio_datapath_acquire(struct data_fifo *fifo_rx) {
 	int ret = 0;
 	if (_count == 0) {
 		uint32_t alloced_cnt;

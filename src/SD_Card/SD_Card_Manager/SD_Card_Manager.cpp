@@ -44,8 +44,8 @@ void SDCardManager::unmount_work_handler(struct k_work *work) {
 
 	bool _inserted = sdcard_manager.sd_inserted();
 
-	if (_inserted && !sdcard_manager.ls_aquired) {
-		ret = sdcard_manager.aquire_ls();
+	if (_inserted && !sdcard_manager.ls_acquired) {
+		ret = sdcard_manager.acquire_ls();
 		if (ret && ret != -EALREADY) {
 			LOG_ERR("Failed to acquire rails on SD insertion: %d", ret);
 			return;
@@ -57,7 +57,7 @@ void SDCardManager::unmount_work_handler(struct k_work *work) {
 		if (ret != 0) {
 			LOG_ERR("Failed to publish sd_card_chan: %d", ret);
 		}
-	} else if (!_inserted && sdcard_manager.ls_aquired) {
+	} else if (!_inserted && sdcard_manager.ls_acquired) {
 		ret = sdcard_manager.unmount();
 		LOG_INF("SD card unmounted due to card removal.");
 
@@ -95,10 +95,10 @@ SDCardManager::~SDCardManager() {
 	
 }
 
-int SDCardManager::aquire_ls() {
+int SDCardManager::acquire_ls() {
 	int ret;
 
-	if (ls_aquired) return -EALREADY;
+	if (ls_acquired) return -EALREADY;
 
 	/* SD path: ls_1_8 (level-shifter low side) + ls_sd (card VDD).
 	 * ls_3_3 is not required by the SD card per schematic. */
@@ -115,18 +115,18 @@ int SDCardManager::aquire_ls() {
 		return ret;
 	}
 
-	ls_aquired = true;
+	ls_acquired = true;
 
 	return 0;
 }
 
 int SDCardManager::release_ls() {
-	if (!ls_aquired) return -EALREADY;
+	if (!ls_acquired) return -EALREADY;
 
 	pm_device_runtime_put(ls_1_8);
 	pm_device_runtime_put(ls_sd);
 
-	ls_aquired = false;
+	ls_acquired = false;
 
 	return 0;
 }
@@ -150,7 +150,7 @@ void SDCardManager::init() {
     /* The card-detect GPIO on this board only reports presence once the SD
      * rails are up (the detect switch references card VDD). Probe by briefly
      * bringing rails up; keep them if a card is there, release otherwise. */
-    ret = aquire_ls();
+    ret = acquire_ls();
     if (ret && ret != -EALREADY) {
         LOG_ERR("Failed to acquire SD rails for presence probe: %d", ret);
         return;

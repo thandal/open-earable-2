@@ -423,7 +423,7 @@ MLX90632::status MLX90632::readRegister16(uint16_t addr, uint16_t &outputPointer
 {
   MLX90632::status returnError = SENSOR_SUCCESS; //By default, return success
 
-  _i2c->aquire();
+  _i2c->acquire();
 
   // 32-Bit-Adresse in ein Byte-Array umwandeln (Big-Endian)
   uint8_t addr_buf[2] = {
@@ -452,7 +452,7 @@ MLX90632::status MLX90632::readRegister32(uint16_t addr, uint32_t &outputPointer
 {
   MLX90632::status returnError = SENSOR_SUCCESS; //By default, return success
 
-  _i2c->aquire();
+  _i2c->acquire();
 
   uint8_t addr_buf[2] = {
     (uint8_t)((addr >> 8) & 0xFF),
@@ -484,7 +484,7 @@ MLX90632::status MLX90632::writeRegister16(uint16_t addr, uint16_t val)
 {
   MLX90632::status returnError = SENSOR_SUCCESS; //By default, return success
 
-  _i2c->aquire();
+  _i2c->acquire();
 
   struct i2c_msg msg[2];
 

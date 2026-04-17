@@ -40,7 +40,7 @@ void TWIM::setClock(uint32_t speed) {
 	}
 }
 
-void TWIM::aquire() {
+void TWIM::acquire() {
 	k_mutex_lock(&mutex, K_FOREVER);
 }
 

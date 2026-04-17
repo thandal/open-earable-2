@@ -120,7 +120,7 @@ T=?   main() → power_manager.begin()
 - **`SDCardManager::init`**: presence probe — briefly acquires `ls_1_8` + `ls_sd`,
   waits 1 ms, checks `sd_state` pin, keeps rails if a card is present, releases
   otherwise. Card-detect can't read the card unless rails are up (project memory:
-  `project_sd_detect_needs_rails`). `aquire_ls` / `release_ls` only manage
+  `project_sd_detect_needs_rails`). `acquire_ls` / `release_ls` only manage
   `ls_1_8` + `ls_sd`.
 - **`main.cpp`**: calls `sdcard_manager.init()` before `disk_access_init("SD")`
   so the SD disk probe sees an already-powered card.
@@ -594,7 +594,7 @@ which puts us into the cold-boot path that works end-to-end.
 | `src/SensorManager/SensorManager.cpp` | `stop_sensor_manager` calls every `.stop()` |
 | `src/drivers/LED_Controller/KTD2026.cpp` | claims only `ls_3_3` |
 | `src/drivers/ADAU1860.cpp` | Audio codec PM |
-| `src/SD_Card/SD_Card_Manager/SD_Card_Manager.cpp` | Presence probe in `init()`; `aquire_ls`/`release_ls` manage only `ls_1_8` + `ls_sd` |
+| `src/SD_Card/SD_Card_Manager/SD_Card_Manager.cpp` | Presence probe in `init()`; `acquire_ls`/`release_ls` manage only `ls_1_8` + `ls_sd` |
 | `src/main.cpp` | `sdcard_manager.init()` before `disk_access_init("SD")` |
 | `src/utils/StateIndicator.cpp` | MCUmgr DFU hook: `get`/`put` on `mx25r64` |
 | `prj.conf` | CONFIG_PM*, CONFIG_PM_DEVICE_POWER_DOMAIN, CONFIG_POWEROFF |
