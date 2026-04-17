@@ -116,13 +116,7 @@ The codebase still mixes C and C++ patterns — `memcpy` on C++ objects (`StateI
 - **`Button.cpp:80–83`** — `gpio_remove_callback()` commented out, potentially leaving dangling ISR callbacks after `end()`.
 - **`battery_service.cpp:~47–48, 141–144`** — commented-out characteristics still present.
 
-### 11. Spelling / Naming Errors in APIs
-
-- **`Wire.h:59`, `TWIM.h:35`** — method named `aquire()` instead of `acquire()`.
-- **`DefaultSensors.h:20`** — `microComponenents` instead of `microComponents`.
-- **`DefaultSensors.h:21–22`** — `"INNER"` vs `"Outer"` case inconsistency.
-
-### 12. TODOs in Production Paths
+### 11. TODOs in Production Paths
 
 - **`streamctrl.c:~606–607`** — `"TODO: check if the device wants to pair"`.
 - **`PowerManager.cpp`** — multiple remaining `TODO` / `check power on condition` / `check states of load switch` comments.
@@ -132,7 +126,7 @@ The codebase still mixes C and C++ patterns — `memcpy` on C++ objects (`StateI
 - **`BQ25120a.cpp:~65`** — `"TODO: check value"` for an unjustified 1ms sleep.
 - **`SensorManager.cpp:~242`** — `"TODO: if (ble_sensors.empty()) ..."`.
 
-### 13. Additional Issues
+### 12. Additional Issues
 
 - **`ParseType.h`** — `parseTypeSizes[]` array still depends on exact enum ordering with no `static_assert`. Adding an enum entry will silently break the mapping.
 - **`SensorScheme.cpp:~203–206`** — `strlen()` called multiple times on the same string instead of caching the result.
@@ -154,6 +148,10 @@ The codebase still mixes C and C++ patterns — `memcpy` on C++ objects (`StateI
 - BMX160 suspend mode was missing — **implemented** as part of the BMI160 port.
 - `EdgeMLSensor.h` commented-out macro block — **removed** during the sensor_sink refactor.
 - `SensorScheme.cpp` inconsistent `-1` / `-ENOMEM` error codes — **normalized** to `-1`.
+- `aquire()` misspelling on `MbedI2C` / `TWIM` and all I2C callers — **renamed** to `acquire()`.
+- `audio_datapath_aquire` and `SDCardManager::aquire_ls` / `ls_aquired` — **renamed** to `acquire` variants.
+- `DefaultSensors.h` `microComponenents` typo — **renamed** to `microComponents`.
+- `DefaultSensors.h` microphone channel name casing (`"INNER"` vs `"Outer"`) — **normalized** to uppercase.
 
 ---
 
