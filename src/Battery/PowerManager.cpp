@@ -668,6 +668,7 @@ static int cmd_battery_info(const struct shell *shell, size_t argc, const char *
     shell_print(shell, "  Time to Empty: %ih %02dmin", (int)tte / 60, (int)tte % 60);
 
     // Battery controller status
+    uint8_t en_ls_ldo;
     {
         BQ25120a::ActiveScope active(battery_controller);
 
@@ -679,7 +680,17 @@ static int cmd_battery_info(const struct shell *shell, size_t argc, const char *
         struct chrg_state charge_ctrl = battery_controller.read_charging_control();
         shell_print(shell, "  Charge Control: enabled=%i, current=%.1f mA",
                 charge_ctrl.enabled, charge_ctrl.mAh);
+
+        en_ls_ldo = (battery_controller.read_ls_ldo_ctrl_raw() >> 7) & 1;
     }
+
+    // Load switch / LDO rail state
+    shell_print(shell, "Load Switches:");
+    shell_print(shell, "  ls_1_8 (P1.11): %d", nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(1, 11)));
+    shell_print(shell, "  ls_3_3 (P0.14): %d", nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 14)));
+    shell_print(shell, "  ls_sd  (P1.12): %d", nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(1, 12)));
+    shell_print(shell, "  PPG LDO (P0.06): %d", nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 6)));
+    shell_print(shell, "  BQ25120A EN_LS_LDO: %u", en_ls_ldo);
 
     return 0;
 }
