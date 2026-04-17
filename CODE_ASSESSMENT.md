@@ -60,7 +60,6 @@ Return codes are logged but not propagated; the system continues in degraded sta
 
 - **`SensorManager.cpp:~134`** — raw cast `(enum sensor_id) config.sensorId` from untrusted BLE data, no bounds check.
 - **`Button.cpp:33`** — `gpio_pin_get_dt()` return (int) cast directly to `button_action` enum.
-- **`PowerManager.cpp:~365`** — still uses `abs()` on a float (should be `fabs()`), undefined behavior.
 - **`time_sync.c:~168`** — integer overflow check happens **after** the overflow.
 
 > The `hw_codec_adau1860.cpp` `#ifdef`-split if/else chain flagged previously was not found in the current code and is treated as resolved pending final verification.
@@ -152,6 +151,7 @@ The codebase still mixes C and C++ patterns — `memcpy` on C++ objects (`StateI
 - `audio_datapath_aquire` and `SDCardManager::aquire_ls` / `ls_aquired` — **renamed** to `acquire` variants.
 - `DefaultSensors.h` `microComponenents` typo — **renamed** to `microComponents`.
 - `DefaultSensors.h` microphone channel name casing (`"INNER"` vs `"Outer"`) — **normalized** to uppercase.
+- `PowerManager.cpp:365` `abs()` on a float — **replaced** with `fabsf()` (added `<math.h>`).
 
 ---
 
@@ -177,7 +177,7 @@ The codebase still mixes C and C++ patterns — `memcpy` on C++ objects (`StateI
 6. **Replace `sensorSchemesMap[id]` with `.find()`** to prevent silent map entry creation.
 7. **Null-check `k_malloc` results** in BQ27220 and fix the VLA on stack.
 8. **Free `active_sensor_configs`** in `sensor_service.c` or switch to a static buffer.
-9. **Replace `abs()` on float with `fabs()`** and fix the post-facto overflow check in `time_sync.c`.
+9. **Fix the post-facto overflow check in `time_sync.c`**.
 10. **Extract magic numbers** into named constants, especially battery parameters and register addresses.
 11. **Introduce a sensor registry** to replace the hardcoded stop/start list in `SensorManager.cpp`.
 12. **Split PowerManager** further into focused classes with single responsibilities.
