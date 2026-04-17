@@ -505,21 +505,16 @@ void PowerManager::shutdown_subsystems() {
     int ret;
 
     uint8_t data = BT_HCI_ERR_REMOTE_USER_TERM_CONN;
-    LOG_INF("shutdown: bt_conn_foreach");
     bt_conn_foreach(BT_CONN_TYPE_ALL, bt_disconnect_handler, &data);
 
-    LOG_INF("shutdown: bt_mgmt_ext_adv_stop");
     ret = bt_mgmt_ext_adv_stop(0);
     if (ret) LOG_WRN("Failed to stop ext adv: %d", ret);
 
-    LOG_INF("shutdown: stop_sensor_manager");
     stop_sensor_manager();
 
-    LOG_INF("shutdown: bt_mgmt_stop_watchdog");
     ret = bt_mgmt_stop_watchdog();
     if (ret) LOG_WRN("Failed to stop watchdog: %d", ret);
 
-    LOG_INF("shutdown: dac.end");
     dac.end();
 }
 
@@ -531,14 +526,10 @@ void PowerManager::reboot() {
 int PowerManager::power_down(bool fault) {
     int ret;
 
-    LOG_INF("power_down: entry (fault=%d)", fault);
-
     shutdown_subsystems();
 
-    LOG_INF("power_down: led_controller.power_off");
     led_controller.power_off();
 
-    LOG_INF("power_down: battery_controller.power_connected");
     bool charging = battery_controller.power_connected();
 
     if (!charging) {
@@ -549,13 +540,11 @@ int PowerManager::power_down(bool fault) {
         // If arming fails, the worst case is "no auto-wake on plug-in" — the
         // user can still wake with a button hold — so log and continue to
         // sys_poweroff() rather than bailing into the ERR_CHK busy-loop.
-        LOG_INF("power_down: battery_controller.set_wakeup_int");
         ret = battery_controller.set_wakeup_int();
         if (ret != 0) {
-            LOG_WRN("power_down: battery_controller.set_wakeup_int() failed: %d — continuing", ret);
+            LOG_WRN("set_wakeup_int() failed: %d — continuing", ret);
         }
 
-        LOG_INF("power_down: battery_controller.enter_high_impedance");
         battery_controller.enter_high_impedance();
     }
 
@@ -564,12 +553,8 @@ int PowerManager::power_down(bool fault) {
     // NETWORK.FORCEOFF=Hold via the bt_hci_transport_teardown → nrf53_cpunet_enable(false)
     // path (zephyr/drivers/bluetooth/hci/nrf53_support.c + nrf53_cpunet_mgmt.c),
     // so no separate net-core shutdown is needed here.
-    LOG_INF("power_down: k_msleep(200) begin");
     k_msleep(200);
-    LOG_INF("power_down: k_msleep(200) end");
-    LOG_INF("power_down: bt_disable begin");
     int bt_ret = bt_disable();
-    LOG_INF("power_down: bt_disable end (ret=%d)", bt_ret);
     if (bt_ret) LOG_WRN("bt_disable() failed: %d", bt_ret);
 
     if (fault) {
@@ -579,23 +564,19 @@ int PowerManager::power_down(bool fault) {
     }
     LOG_PANIC();
 
-    LOG_INF("power_down: error_led off");
     gpio_pin_set_dt(&error_led, 0);
 
     if (charging) {
-        LOG_INF("power_down: sys_reboot (charging)");
         sys_reboot(SYS_REBOOT_COLD);
         return 0;
     }
 
     // Disable EN_LS_LDO in the BQ25120A so the 3.3V LDO is fully off
-    LOG_INF("power_down: write_LS_control(false)");
     {
         BQ25120a::ActiveScope active(battery_controller);
         battery_controller.write_LS_control(false);
     }
 
-    LOG_INF("power_down: pm_device_action_run ls_sd/ls_3_3/ls_1_8 SUSPEND");
     ret = pm_device_action_run(ls_sd,  PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_3_3, PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_1_8, PM_DEVICE_ACTION_SUSPEND);
@@ -623,10 +604,8 @@ int PowerManager::power_down(bool fault) {
         LOG_PANIC();
     }
 
-    LOG_INF("power_down: pm_device_action_run cons SUSPEND");
     ret = pm_device_action_run(cons, PM_DEVICE_ACTION_SUSPEND);
 
-    LOG_INF("power_down: sys_poweroff");
     sys_poweroff();
 
     // safety if poweroff failed
