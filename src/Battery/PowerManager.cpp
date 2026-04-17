@@ -39,9 +39,11 @@ LOG_MODULE_REGISTER(power_manager, LOG_LEVEL_DBG);
 
 K_WORK_DELAYABLE_DEFINE(PowerManager::charge_ctrl_delayable, PowerManager::charge_ctrl_work_handler);
 K_WORK_DELAYABLE_DEFINE(PowerManager::power_down_work, PowerManager::power_down_work_handler);
+K_WORK_DELAYABLE_DEFINE(PowerManager::power_button_watch_work, PowerManager::power_button_watch_handler);
 
 K_WORK_DEFINE(PowerManager::fuel_gauge_work, PowerManager::fuel_gauge_work_handler);
 K_WORK_DEFINE(PowerManager::battery_controller_work, PowerManager::battery_controller_work_handler);
+K_WORK_DEFINE(PowerManager::usb_plug_reboot_work, PowerManager::usb_plug_reboot_handler);
 
 ZBUS_CHAN_DEFINE(battery_chan, struct battery_data, NULL, NULL, ZBUS_OBSERVERS_EMPTY,
     ZBUS_MSG_INIT(0));
@@ -65,10 +67,19 @@ void PowerManager::power_good_callback(const struct device *dev, struct gpio_cal
     if (power_good) {
         power_manager.charger_init_pending = true;
         k_work_schedule(&charge_ctrl_delayable, K_NO_WAIT);
+        // USB MSC can't come up cleanly against a running system — the SD /
+        // USB stacks race with whatever the app is doing. Take the reliable
+        // path: reboot so we come back up through the cold-boot-with-USB
+        // path, which is known to work end-to-end.
+        if (power_manager.power_on) k_work_submit(&usb_plug_reboot_work);
     } else {
         k_work_cancel_delayable(&charge_ctrl_delayable);
         if (!power_manager.power_on) k_work_reschedule(&power_manager.power_down_work, K_NO_WAIT);
     }
+}
+
+void PowerManager::usb_plug_reboot_handler(struct k_work * work) {
+    power_manager.reboot();
 }
 
 void PowerManager::power_down_work_handler(struct k_work * work) {
@@ -89,10 +100,22 @@ void PowerManager::battery_controller_work_handler(struct k_work * work) {
         state = battery_controller.read_button_state();
     }
 
-    if (state.wake_2) {
+    // WAKE event = long-press threshold reached. Toggle power immediately so
+    // the user sees the state change while the button is still held. Events
+    // that latched from the power-on press itself are suppressed until the
+    // user has released the button at least once (first_release_seen).
+    if (state.wake_2 && power_manager.first_release_seen) {
         power_manager.power_on = !power_manager.power_on;
         if (!power_manager.power_on) power_manager.power_down();
     }
+}
+
+void PowerManager::power_button_watch_handler(struct k_work * work) {
+    if (earable_btn.getState() == BUTTON_RELEASED) {
+        power_manager.first_release_seen = true;
+        return;
+    }
+    k_work_reschedule(&power_button_watch_work, K_MSEC(100));
 }
 
 struct charging_snapshot {
@@ -163,7 +186,8 @@ void PowerManager::fuel_gauge_work_handler(struct k_work * work) {
 
     if (power_manager.power_on && snap.bat.SYSDWN) {
         LOG_WRN("Battery reached system down voltage.");
-        k_work_reschedule(&power_manager.power_down_work, K_NO_WAIT);
+        power_manager.power_down();
+        return;
     }
 
     if (snap.bat.CHGINH) {
@@ -254,18 +278,12 @@ int PowerManager::begin() {
 
     uint8_t bat_state = battery_controller.read_charging_state();
 
-    button_state btn = battery_controller.read_button_state();
-
-    power_on = btn.wake_2;
-
     // get reset reason
     uint32_t reset_reas = NRF_RESET->RESETREAS;
 
     // Boot diagnostics: decode RESETREAS and snapshot PMIC fault / fuel-gauge
     // status so spurious wakes from System OFF can be traced to a specific
-    // line (BQ25120A PG/INT or BQ27220 GPOUT). OFF (bit 16) set means the
-    // SoC woke from System OFF via pin sense — i.e. one of the armed PMIC
-    // wake lines fired, not a user button reset.
+    // line (BQ25120A PG/INT or BQ27220 GPOUT).
     {
         uint8_t bq_fault    = battery_controller.read_fault();
         uint8_t bq_ts_fault = battery_controller.read_ts_fault();
@@ -291,18 +309,14 @@ int PowerManager::begin() {
                 fg.OTC, fg.OTD, fg.TCA, fg.TDA);
     }
 
-    // reset the reset reason
-    NRF_RESET->RESETREAS = 0xFFFFFFFF;
-
+    // Record the BQ25120A timer_reset bit on RESETPIN wake (long-hold button
+    // vs. programmer-driven nRESET) for downstream policy decisions.
     if (reset_reas & RESET_RESETREAS_RESETPIN_Msk) {
         oe_boot_state.timer_reset = bat_state & (1 << 4);
-        power_on |= oe_boot_state.timer_reset;
     }
 
-    if (reset_reas & RESET_RESETREAS_SREQ_Msk) {
-        LOG_INF("Rebooting ...");
-        power_on = true;
-    }
+    // reset the reset reason
+    NRF_RESET->RESETREAS = 0xFFFFFFFF;
 
     setup_pmic();
     battery_controller.set_int_callback(battery_controller_callback);
@@ -312,37 +326,25 @@ int PowerManager::begin() {
         fuel_gauge.setup(_battery_settings);
     }
 
-    bool battery_condition = check_battery();
-
-    if (!battery_condition) LOG_WRN("Battery check failed.");
-
-    bool charging = battery_controller.power_connected();
-
-    if (!battery_condition) {
-        power_on = false;
-        if (!charging){
-            //TODO: Flash red LED once
-            return power_down(false);
-        }
+    // Battery health is the only gate on booting: if we can't run safely,
+    // power down and rely on the charger wake path to bring us back.
+    if (!check_battery()) {
+        LOG_WRN("Battery check failed — powering down.");
+        return power_down(false);
     }
 
-    if (charging) {
-        oe_state.charging_state = POWER_CONNECTED;
+    power_on = true;
 
+    // Start watching the button GPIO so a long-press + release toggles power.
+    // The first release consumes the power-on press so it doesn't immediately
+    // toggle us back off.
+    k_work_reschedule(&power_button_watch_work, K_MSEC(100));
+
+    oe_state.charging_state = battery_controller.power_connected() ? POWER_CONNECTED
+                                                                   : DISCHARGING;
+    if (oe_state.charging_state == POWER_CONNECTED) {
         k_work_schedule(&charge_ctrl_delayable, K_NO_WAIT);
-
-        if (!power_on) {
-            state_indicator.init(oe_state);
-        }
-
-        while(!power_on && battery_controller.power_connected()) {
-            k_sleep(K_SECONDS(1));
-        }
-    } else {
-        oe_state.charging_state = DISCHARGING;
     }
-
-    if (!power_on) return power_down();
 
     battery_controller.set_power_connect_callback(power_good_callback);
     fuel_gauge.set_int_callback(fuel_gauge_callback);
@@ -499,52 +501,61 @@ void PowerManager::setup_pmic() {
     battery_controller.setup(_battery_settings);
 }
 
-void PowerManager::reboot() {
+void PowerManager::shutdown_subsystems() {
     int ret;
 
-    // disconnect devices
     uint8_t data = BT_HCI_ERR_REMOTE_USER_TERM_CONN;
+    LOG_INF("shutdown: bt_conn_foreach");
     bt_conn_foreach(BT_CONN_TYPE_ALL, bt_disconnect_handler, &data);
 
+    LOG_INF("shutdown: bt_mgmt_ext_adv_stop");
     ret = bt_mgmt_ext_adv_stop(0);
-    if (ret) {
-        LOG_WRN("Failed to stop ext adv: %d", ret);
-    }
+    if (ret) LOG_WRN("Failed to stop ext adv: %d", ret);
 
+    LOG_INF("shutdown: stop_sensor_manager");
     stop_sensor_manager();
 
+    LOG_INF("shutdown: bt_mgmt_stop_watchdog");
     ret = bt_mgmt_stop_watchdog();
-    ERR_CHK(ret);
+    if (ret) LOG_WRN("Failed to stop watchdog: %d", ret);
 
+    LOG_INF("shutdown: dac.end");
     dac.end();
+}
 
+void PowerManager::reboot() {
+    shutdown_subsystems();
     sys_reboot(SYS_REBOOT_COLD);
 }
 
 int PowerManager::power_down(bool fault) {
     int ret;
 
-    uint8_t data = BT_HCI_ERR_REMOTE_USER_TERM_CONN;
-    bt_conn_foreach(BT_CONN_TYPE_ALL, bt_disconnect_handler, &data);
+    LOG_INF("power_down: entry (fault=%d)", fault);
 
-    ret = bt_mgmt_ext_adv_stop(0);
-    if (ret) {
-        LOG_WRN("Failed to stop ext adv: %d", ret);
-    }
+    shutdown_subsystems();
 
+    LOG_INF("power_down: led_controller.power_off");
     led_controller.power_off();
 
-    stop_sensor_manager();
-
+    LOG_INF("power_down: battery_controller.power_connected");
     bool charging = battery_controller.power_connected();
 
     if (!charging) {
+        // Arm BQ25120A PG as the only System-OFF wake source (wake-on-plug).
+        // BQ25120A INT and BQ27220 GPOUT are intentionally NOT armed — their
+        // runtime faults / SOC-change pulses have no useful response from
+        // System OFF and caused spurious wakes minutes after power-off.
+        // If arming fails, the worst case is "no auto-wake on plug-in" — the
+        // user can still wake with a button hold — so log and continue to
+        // sys_poweroff() rather than bailing into the ERR_CHK busy-loop.
+        LOG_INF("power_down: battery_controller.set_wakeup_int");
         ret = battery_controller.set_wakeup_int();
-        if (ret != 0) return ret;
+        if (ret != 0) {
+            LOG_WRN("power_down: battery_controller.set_wakeup_int() failed: %d — continuing", ret);
+        }
 
-        ret = fuel_gauge.set_wakeup_int();
-        if (ret != 0) return ret;
-
+        LOG_INF("power_down: battery_controller.enter_high_impedance");
         battery_controller.enter_high_impedance();
     }
 
@@ -553,8 +564,12 @@ int PowerManager::power_down(bool fault) {
     // NETWORK.FORCEOFF=Hold via the bt_hci_transport_teardown → nrf53_cpunet_enable(false)
     // path (zephyr/drivers/bluetooth/hci/nrf53_support.c + nrf53_cpunet_mgmt.c),
     // so no separate net-core shutdown is needed here.
+    LOG_INF("power_down: k_msleep(200) begin");
     k_msleep(200);
+    LOG_INF("power_down: k_msleep(200) end");
+    LOG_INF("power_down: bt_disable begin");
     int bt_ret = bt_disable();
+    LOG_INF("power_down: bt_disable end (ret=%d)", bt_ret);
     if (bt_ret) LOG_WRN("bt_disable() failed: %d", bt_ret);
 
     if (fault) {
@@ -564,23 +579,23 @@ int PowerManager::power_down(bool fault) {
     }
     LOG_PANIC();
 
-    ret = bt_mgmt_stop_watchdog();
-
-    dac.end();
-
+    LOG_INF("power_down: error_led off");
     gpio_pin_set_dt(&error_led, 0);
 
     if (charging) {
+        LOG_INF("power_down: sys_reboot (charging)");
         sys_reboot(SYS_REBOOT_COLD);
         return 0;
     }
 
     // Disable EN_LS_LDO in the BQ25120A so the 3.3V LDO is fully off
+    LOG_INF("power_down: write_LS_control(false)");
     {
         BQ25120a::ActiveScope active(battery_controller);
         battery_controller.write_LS_control(false);
     }
 
+    LOG_INF("power_down: pm_device_action_run ls_sd/ls_3_3/ls_1_8 SUSPEND");
     ret = pm_device_action_run(ls_sd,  PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_3_3, PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_1_8, PM_DEVICE_ACTION_SUSPEND);
@@ -608,8 +623,10 @@ int PowerManager::power_down(bool fault) {
         LOG_PANIC();
     }
 
+    LOG_INF("power_down: pm_device_action_run cons SUSPEND");
     ret = pm_device_action_run(cons, PM_DEVICE_ACTION_SUSPEND);
 
+    LOG_INF("power_down: sys_poweroff");
     sys_poweroff();
 
     // safety if poweroff failed
