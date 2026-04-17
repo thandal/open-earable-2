@@ -80,27 +80,31 @@ int BQ25120a::reset() {
 }
 
 int BQ25120a::set_wakeup_int() {
-        int ret;
-
-        ret = device_is_ready(pg_pin.port); //bool
-        if (!ret) {
+        if (!device_is_ready(pg_pin.port)) {
                 LOG_ERR("BQ25120a pins not ready.\n");
                 return -1;
         }
 
-        ret = gpio_pin_interrupt_configure_dt(&pg_pin, GPIO_INT_LEVEL_ACTIVE);
-        if (ret != 0) {
-                LOG_ERR("Failed to setup interrupt on PG.\n");
-                return ret;
+        // Arm two System-OFF wake sources from the BQ25120A:
+        //   PG  — wake-on-plug (VBUS present)
+        //   INT — wake-on-button. The BQ25120A signals a pushbutton WAKE_1/
+        //         WAKE_2 event via its INT pin; without this armed, button
+        //         hold only wakes the SoC via the BQ25120A's *RESET* output
+        //         (much longer timer, ~12 s), not the fast ~4 s WAKE path.
+        // INT also pulses on faults (UVLO / OV / TS); those are re-entered
+        // into power_down() in begin() if the user didn't actually press
+        // the button, so spurious wakes just return to System OFF.
+        int pg_ret = gpio_pin_interrupt_configure_dt(&pg_pin, GPIO_INT_LEVEL_ACTIVE);
+        if (pg_ret != 0) {
+                LOG_ERR("Failed to setup interrupt on PG: %d.\n", pg_ret);
         }
 
-        ret = gpio_pin_interrupt_configure_dt(&int_pin, GPIO_INT_LEVEL_ACTIVE);
-        if (ret != 0) {
-                LOG_ERR("Failed to setup interrupt on INT.\n");
-                return ret;
+        int int_ret = gpio_pin_interrupt_configure_dt(&int_pin, GPIO_INT_LEVEL_ACTIVE);
+        if (int_ret != 0) {
+                LOG_ERR("Failed to setup interrupt on INT: %d.\n", int_ret);
         }
 
-        return 0;
+        return pg_ret | int_ret;
 }
 
 bool BQ25120a::readReg(uint8_t reg, uint8_t * buffer, uint16_t len) {
