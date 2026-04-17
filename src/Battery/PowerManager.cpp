@@ -270,7 +270,7 @@ int PowerManager::begin() {
         uint8_t bq_fault    = battery_controller.read_fault();
         uint8_t bq_ts_fault = battery_controller.read_ts_fault();
         bat_status fg       = fuel_gauge.battery_status();
-        LOG_WRN("boot: RESETREAS=0x%08x [%s%s%s%s%s%s%s%s%s]",
+        LOG_WRN("boot: RESETREAS=0x%08x [%s%s%s%s%s%s%s%s%s%s%s]",
                 reset_reas,
                 (reset_reas & RESET_RESETREAS_RESETPIN_Msk) ? "PIN "  : "",
                 (reset_reas & RESET_RESETREAS_DOG0_Msk)     ? "DOG0 " : "",
@@ -279,7 +279,9 @@ int PowerManager::begin() {
                 (reset_reas & RESET_RESETREAS_LOCKUP_Msk)   ? "LOCK " : "",
                 (reset_reas & RESET_RESETREAS_OFF_Msk)      ? "OFF "  : "",
                 (reset_reas & RESET_RESETREAS_LPCOMP_Msk)   ? "LPC "  : "",
+                (reset_reas & RESET_RESETREAS_DIF_Msk)      ? "DIF "  : "",
                 (reset_reas & RESET_RESETREAS_NFC_Msk)      ? "NFC "  : "",
+                (reset_reas & RESET_RESETREAS_DOG1_Msk)     ? "DOG1 " : "",
                 (reset_reas & RESET_RESETREAS_VBUS_Msk)     ? "VBUS " : "");
         LOG_WRN("boot: BQ25120A fault=0x%02x ts_fault=0x%02x  "
                 "BQ27220 DSG=%u SYSDWN=%u BATTPRES=%u FC=%u FD=%u "
