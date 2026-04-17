@@ -26,11 +26,9 @@ ZBUS_CHAN_DECLARE(battery_chan);
 
 struct mgmt_callback mcu_mgr_cb;
 
-/* The external SPI NOR (MX25R6435F) sits behind ls_1_8 via power-domains;
- * runtime-PM auto is enabled on the DT node. Acquire on DFU start so the
- * spi_nor driver's TURN_ON/RESUME runs (JEDEC probe, DPD exit); release on
- * stop so the driver re-enters DPD and ls_1_8 drops if no one else holds it. */
-static const struct device *const mx25r64_dev = DEVICE_DT_GET(DT_NODELABEL(mx25r64));
+/* Hold the 1.8 V rail (ls_1_8) up for the duration of a DFU upload so the
+ * MX25R6435F is powered when mcumgr writes to it. */
+static const struct device *const ls_1_8_dev = DEVICE_DT_GET(load_switch_1_8_id);
 
 enum mgmt_cb_return chuck_write_indication(uint32_t event, enum mgmt_cb_return prev_status,
                                 int32_t *rc, uint16_t *group, bool *abort_more,
@@ -38,10 +36,10 @@ enum mgmt_cb_return chuck_write_indication(uint32_t event, enum mgmt_cb_return p
 {
     switch (event) {
     case MGMT_EVT_OP_IMG_MGMT_DFU_STARTED:
-        pm_device_runtime_get(mx25r64_dev);
+        pm_device_runtime_get(ls_1_8_dev);
         break;
     case MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED:
-        pm_device_runtime_put(mx25r64_dev);
+        pm_device_runtime_put(ls_1_8_dev);
         break;
     case MGMT_EVT_OP_IMG_MGMT_DFU_CHUNK:
         led_controller.setColor(LED_ORANGE);

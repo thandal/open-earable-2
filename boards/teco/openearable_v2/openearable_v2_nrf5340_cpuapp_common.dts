@@ -29,8 +29,6 @@
 		 power-delay-us = <300>; // 250us per datasheet
 		 status = "okay";
 		 default-on;
-		 zephyr,pm-device-runtime-auto;
-		 #power-domain-cells = <0>;
 	 };
 
 	 load_switch_sd: load_switch_sd {
@@ -39,7 +37,6 @@
 		 power-delay-us = <300>; // 250us per datasheet
 		 status = "okay";
 		 default-on;
-		 zephyr,pm-device-runtime-auto;
 	 };
  
 	 gpio_fwd: nrf-gpio-forwarder {
