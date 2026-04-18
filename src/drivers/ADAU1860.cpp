@@ -524,7 +524,7 @@ bool ADAU1860::readReg(uint32_t reg, uint8_t * buffer, uint16_t len) {
 	msg[1].len = len;
 	msg[1].flags = I2C_MSG_RESTART | I2C_MSG_READ | I2C_MSG_STOP;
 
-        _i2c->aquire();
+        _i2c->acquire();
 
         // Send address and read data
         ret = i2c_transfer(_i2c->master, msg, 2, address);
@@ -556,7 +556,7 @@ void ADAU1860::writeReg(uint32_t reg, uint8_t *buffer, uint16_t len) {
 	msg[1].len = len;
 	msg[1].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
 
-        _i2c->aquire();
+        _i2c->acquire();
 
 	ret = i2c_transfer(_i2c->master, msg, 2, address);
         if (ret) {
