@@ -327,6 +327,16 @@ int PowerManager::begin() {
         fuel_gauge.setup(_battery_settings);
     }
 
+    // If we woke from System OFF via a GPIO event (INT or PG), check if it was intended.
+    // INT also pulses on PMIC faults and timer resets. If the user isn't holding the 
+    // button and power isn't connected, this is an undesired wake.
+    if (reset_reas & RESET_RESETREAS_OFF_Msk) {
+        if (!battery_controller.power_connected() && earable_btn.getState() == BUTTON_RELEASED) {
+            LOG_WRN("Undesired wake from System OFF detected. Powering down.");
+            return power_down(false);
+        }
+    }
+
     // Battery health is the only gate on booting: if we can't run safely,
     // power down and rely on the charger wake path to bring us back.
     if (!check_battery()) {
@@ -533,22 +543,6 @@ int PowerManager::power_down(bool fault) {
 
     bool charging = battery_controller.power_connected();
 
-    if (!charging) {
-        // Arm BQ25120A PG as the only System-OFF wake source (wake-on-plug).
-        // BQ25120A INT and BQ27220 GPOUT are intentionally NOT armed — their
-        // runtime faults / SOC-change pulses have no useful response from
-        // System OFF and caused spurious wakes minutes after power-off.
-        // If arming fails, the worst case is "no auto-wake on plug-in" — the
-        // user can still wake with a button hold — so log and continue to
-        // sys_poweroff() rather than bailing into the ERR_CHK busy-loop.
-        ret = battery_controller.set_wakeup_int();
-        if (ret != 0) {
-            LOG_WRN("set_wakeup_int() failed: %d — continuing", ret);
-        }
-
-        battery_controller.enter_high_impedance();
-    }
-
     // Let BT disconnect events from bt_conn_disconnect above propagate, then
     // tear down the host. Side effect: on nRF5340 this also writes
     // NETWORK.FORCEOFF=Hold via the bt_hci_transport_teardown → nrf53_cpunet_enable(false)
@@ -582,16 +576,17 @@ int PowerManager::power_down(bool fault) {
     ret = pm_device_action_run(ls_3_3, PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_1_8, PM_DEVICE_ACTION_SUSPEND);
 
-    // Pre-poweroff audit. Expected: load-switch pins LOW, EN_LS_LDO=0,
-    // pmic_cd=0 (BQ25120A in Hi-Z; datasheet Table 1: CD=L with VIN absent →
-    // Hi-Z ~1.4 µA quiescent, SYS still powered by BAT). netcore_off reflects
-    // whatever bt_disable() left behind. Anything else is a possible leak.
+    // Pre-poweroff audit. Expected: load-switch pins LOW, EN_LS_LDO=0.
+    // pmic_cd reflects the CD line state *before* we drive it high for
+    // Ship Mode entry below. netcore_off reflects whatever bt_disable()
+    // left behind. Anything else is a possible leak.
     {
         uint8_t ls_1_8_pin = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(1, 11));
         uint8_t ls_3_3_pin = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 14));
         uint8_t ls_sd_pin  = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(1, 12));
         uint8_t ppg_ldo    = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 6));
         uint8_t pmic_cd    = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 17));
+        uint8_t on_btn     = nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(1, 5));
         uint8_t netcore_off = NRF_RESET->NETWORK.FORCEOFF & 1;
         uint8_t en_ls_ldo;
         {
@@ -599,17 +594,45 @@ int PowerManager::power_down(bool fault) {
             en_ls_ldo = (battery_controller.read_ls_ldo_ctrl_raw() >> 7) & 1;
         }
         LOG_WRN("poweroff audit: ls_1_8=%u ls_3_3=%u ls_sd=%u ppg_ldo=%u "
-                "EN_LS_LDO=%u pmic_cd=%u netcore_off=%u",
+                "EN_LS_LDO=%u pmic_cd=%u on_btn=%u netcore_off=%u",
                 ls_1_8_pin, ls_3_3_pin, ls_sd_pin, ppg_ldo,
-                en_ls_ldo, pmic_cd, netcore_off);
+                en_ls_ldo, pmic_cd, on_btn, netcore_off);
         LOG_PANIC();
     }
 
     ret = pm_device_action_run(cons, PM_DEVICE_ACTION_SUSPEND);
 
+    // Ship Mode entry (BQ25120A datasheet §9.3.1.1 Figure 15) requires MR
+    // high. If we got here via the long-press WAKE_2 path, the user is still
+    // holding the button (MR low); wait for release. Bound the wait so a
+    // stuck button can't block shutdown forever — after the timeout we fall
+    // through to sys_poweroff() which gives System OFF (~µA) rather than
+    // Ship Mode (~nA), but at least we don't spin.
+    //
+    // Poll the raw ON+BTN pin (gpio1.5, high when button pressed) directly
+    // rather than earable_btn.getState(): the Button class updates its
+    // cached state from a k_work on the system work queue, which is the
+    // same queue we may be executing on — so getState() can be stale.
+    const uint32_t BTN_PIN = NRF_GPIO_PIN_MAP(1, 5);
+    for (int i = 0; i < 50 && nrf_gpio_pin_read(BTN_PIN); i++) {
+        k_msleep(100);
+    }
+
+    // Fire-and-die: drives CD high and writes EN_SHIPMODE=1. The BQ25120A
+    // latches BAT FET off within tQUIET (< 1 ms per datasheet timing
+    // diagrams), SYS collapses, the nRF5340 loses power. Quiescent drain in
+    // Ship Mode is ~2 nA (datasheet I_BAT_SHIP) vs ~0.7–4 µA in Hi-Z — the
+    // ~1000× factor is what gives months-of-shelf-life behaviour. Wake path:
+    // long MR press (>= MRRESET time configured in setup()) asserts the
+    // BQ25120A RESET output, which is wired to nRF5340 nRESET → cold boot.
+    battery_controller.enter_ship_mode();
+
+    // Fallbacks. If Ship Mode entry was declined (e.g. VIN re-appeared in
+    // the last millisecond, invalidating the VIN<VUVLO precondition), drop
+    // to System OFF via sys_poweroff(); if even that returns, cold-reboot.
+    k_msleep(100);
     sys_poweroff();
 
-    // safety if poweroff failed
     k_msleep(1000);
     sys_reboot(SYS_REBOOT_COLD);
 }

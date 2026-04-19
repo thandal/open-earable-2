@@ -87,6 +87,11 @@ public:
     bool power_connected();
     void enter_high_impedance();
     void exit_high_impedance();
+    // Fire-and-die Ship Mode entry (datasheet §9.3.1.1, Figure 15). Caller
+    // MUST ensure VIN is absent and MR is high; this drives CD high and
+    // writes EN_SHIPMODE=1. SYS collapses within tQUIET and the SoC loses
+    // power — this call does not return to a usable state.
+    void enter_ship_mode();
     void disable_charge();
     void enable_charge();
     

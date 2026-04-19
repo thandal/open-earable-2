@@ -162,6 +162,41 @@ void BQ25120a::setup(const battery_settings &_battery_settings) {
         write_termination_control(_battery_settings.i_term);
         write_LDO_voltage_control(3.3);
         write_uvlo_ilim(params);
+
+        // Push-button Control (register 0x08, datasheet Table 21). Reset
+        // default is 0110_10xx: MRWAKE1=0 (80 ms), MRWAKE2=1 (1500 ms),
+        // MRREC=1 (device enters Hi-Z after RESET, not Ship Mode),
+        // MRRESET=01 (9 s hold-to-reset), PGB_MR=0.
+        // Only change: MRRESET 01→00 (9 s → 5 s) so the power-on hold time
+        // feels closer to the old firmware's ~4 s. Bottom two bits are
+        // read-only WAKE1/WAKE2 status; write 0 there.
+        uint8_t btn_ctrl = (0 << 7)  // MRWAKE1 = 0 (80 ms)
+                         | (1 << 6)  // MRWAKE2 = 1 (1500 ms)
+                         | (1 << 5)  // MRREC   = 1 (Hi-Z after RESET)
+                         | (0 << 4)  // MRRESET_1
+                         | (0 << 3)  // MRRESET_0  (MRRESET = 00 → 5 s)
+                         | (0 << 2); // PGB_MR  = 0
+        writeReg(registers::BTN_CTRL, &btn_ctrl, sizeof(btn_ctrl));
+}
+
+void BQ25120a::enter_ship_mode() {
+        // Ship Mode entry per datasheet §9.3.1.1 Figure 15: VIN < VUVLO AND
+        // CD high AND MR high must all hold through tQUIET for the chip to
+        // actually latch off. Caller guarantees VIN absent and MR high;
+        // we drive CD high here and issue the I2C write.
+        //
+        // Deliberately does NOT wrap in ActiveScope — ActiveScope's destructor
+        // would drop CD low after the write, which per Figure 15 can abort
+        // the transition. After this function, the chip disables its BAT FET
+        // within tQUIET; SYS collapses and the nRF5340 loses power. Do not
+        // touch the chip (or expect any code to run reliably) after this.
+        //
+        // Register 0x00 bit 5 is EN_SHIPMODE (write-only). Other bits in the
+        // byte are read-only status (STAT, CD_STAT, VINDPM_STAT, etc.), so
+        // writing 0x20 is fine — only EN_SHIPMODE is affected.
+        exit_high_impedance();
+        uint8_t val = 1 << 5;  // EN_SHIPMODE
+        writeReg(registers::CTRL, &val, sizeof(val));
 }
 
 uint8_t BQ25120a::read_charging_state() {
