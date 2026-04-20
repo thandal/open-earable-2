@@ -30,7 +30,9 @@ This is a **Zephyr RTOS** firmware project for the **nRF5340** dual-core SoC, bu
 
 ## Inter-Module Communication
 
-Modules are decoupled via **Zephyr ZBUS** — a publish/subscribe message bus. Key message types include `button_msg`, `le_audio_msg`, `sensor_msg`, `battery_data`, `volume_msg`, and `sd_msg`.
+Most modules are decoupled via **Zephyr ZBUS** — a publish/subscribe message bus. Channels include `button_chan` (`button_msg`), `le_audio_chan` (`le_audio_msg`), `battery_chan` (`battery_data`), `volume_chan` (`volume_msg`), `sd_card_chan` (`sd_msg`), and others.
+
+Sensor data bypasses ZBUS for throughput: SensorManager modules write `sensor_msg` structs directly via `sensor_sink_put()`, which fans out to the SD logger and the BLE sensor-service GATT queue.
 
 ## Configuration Files
 
@@ -42,7 +44,7 @@ Modules are decoupled via **Zephyr ZBUS** — a publish/subscribe message bus. K
 ## Data Flow
 
 - **Audio:** BLE LE Audio ISO → LC3 decode → audio datapath → I2S → ADAU1860 codec (and reverse for mic capture)
-- **Sensors:** I2C hardware → SensorManager → ZBUS → BLE GATT notifications + SD card logging
+- **Sensors:** I2C hardware → SensorManager → sensor_sink → BLE GATT notifications + SD card logging
 - **Power:** BQ25120A charger → BQ27220 fuel gauge → PowerManager → ZBUS → LED status + BLE notifications
 
 ## Build & Flash
@@ -81,9 +83,3 @@ NRF5340 Internal Pullups:
 NRF5340 Internal Pulldowns:
 - LSCTRL
 - ON+BTN
-
-## Optimization Opportunities (from datasheet review)
-
-- **BMP388:** Running with no oversampling and no IIR filter. The datasheet recommends at least x4 pressure oversampling + IIR coeff 3 for indoor navigation (5 cm altitude noise vs 55 cm with current defaults). See BMP388 datasheet Table "Recommended Filter Settings."
-- **BMX160:** Has a 1024-byte hardware FIFO that is not utilized. At higher ODRs, the current polling approach risks data loss. Enabling header-mode FIFO with watermark interrupt would reduce I2C transactions and CPU wakeups.
-- **MLX90632:** Calibration constants are global `double` variables (104 bytes). These should be `float` class members — the Cortex-M33 FPU is single-precision only, so `double` math is emulated in software.
