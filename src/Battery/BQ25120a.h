@@ -60,9 +60,48 @@ public:
         { 1 << 7, "VIN_OV: input over-voltage (persistent)" },
     };
 
+    BQ25120a(TWIM * i2c);
+
+    int begin();
+    int set_wakeup_int();
+
+    int reset();
+
+    void setup(const battery_settings &_battery_settings);
+
+    bool power_connected();
+    // Fire-and-die Ship Mode entry (datasheet §9.3.1.1, Figure 15). Caller
+    // MUST ensure VIN is absent and MR is high; this drives CD high and
+    // writes EN_SHIPMODE=1. SYS collapses within tQUIET and the SoC loses
+    // power — this call does not return to a usable state.
+    void enter_ship_mode();
+    void disable_charge();
+    void enable_charge();
+
+    uint8_t read_charging_state();
+    ChargePhase read_charge_phase();
+    uint8_t read_fault();
+    uint8_t read_ts_fault();
+    chrg_state read_charging_control();
+    uint8_t write_charging_control(float mA);
+    float read_battery_voltage_control();
+    struct chrg_state read_termination_control();
+    ilim_uvlo read_uvlo_ilim();
+    void disable_ts();
+    float read_ldo_voltage();
+    uint8_t read_ls_ldo_ctrl_raw();
+    uint8_t write_LS_control(bool enable);
+
+    button_state read_button_state();
+
+    int set_power_connect_callback(gpio_callback_handler_t handler);
+    int set_int_callback(gpio_callback_handler_t handler);
+private:
     // RAII guard: brackets any I2C access with exit/enter high-impedance.
     // Refcounted so nested scopes compose; mutex serialises concurrent
-    // thread/work-handler entries so the 0↔1 transition is atomic.
+    // thread/work-handler entries so the 0↔1 transition is atomic. Every
+    // public I2C method self-wraps in one of these, so external callers
+    // never need to touch it directly.
     class ActiveScope {
     public:
         explicit ActiveScope(BQ25120a &c);
@@ -73,51 +112,18 @@ public:
         BQ25120a &c_;
     };
 
-    BQ25120a(TWIM * i2c);
-
-    int begin();
-    int set_wakeup_int();
-
-    int reset();
-
-    void setup_ts_control();
-
-    void setup(const battery_settings &_battery_settings);
-
-    bool power_connected();
+    // Hi-Z control. Driven exclusively by ActiveScope ctor/dtor. Only
+    // enter_ship_mode() pokes Hi-Z directly (see its comment for why).
     void enter_high_impedance();
     void exit_high_impedance();
-    // Fire-and-die Ship Mode entry (datasheet §9.3.1.1, Figure 15). Caller
-    // MUST ensure VIN is absent and MR is high; this drives CD high and
-    // writes EN_SHIPMODE=1. SYS collapses within tQUIET and the SoC loses
-    // power — this call does not return to a usable state.
-    void enter_ship_mode();
-    void disable_charge();
-    void enable_charge();
-    
-    uint8_t read_charging_state();
-    ChargePhase read_charge_phase();
-    uint8_t read_fault();
-    uint8_t read_ts_fault();
-    chrg_state read_charging_control();
-    uint8_t write_charging_control(float mA);
-    float read_battery_voltage_control();
+
+    // Setup-only helpers. setup()'s ActiveScope covers all of them.
+    void setup_ts_control();
     uint8_t write_battery_voltage_control(float volt);
-    struct chrg_state read_termination_control();
     uint8_t write_termination_control(float mA, bool enable_termination = true);
-    ilim_uvlo read_uvlo_ilim();
     uint8_t write_uvlo_ilim(ilim_uvlo param);
-    void disable_ts();
     uint8_t write_LDO_voltage_control(float volt);
-    float read_ldo_voltage();
-    uint8_t read_ls_ldo_ctrl_raw();
-    uint8_t write_LS_control(bool enable);
 
-    button_state read_button_state();
-
-    int set_power_connect_callback(gpio_callback_handler_t handler);
-    int set_int_callback(gpio_callback_handler_t handler);
-private:
     bool readReg(uint8_t reg, uint8_t * buffer, uint16_t len);
     void writeReg(uint8_t reg, uint8_t * buffer, uint16_t len);
 

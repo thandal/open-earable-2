@@ -200,6 +200,8 @@ void BQ25120a::enter_ship_mode() {
 }
 
 uint8_t BQ25120a::read_charging_state() {
+        ActiveScope active(*this);
+
         uint8_t status = 0;
         bool ret = readReg(registers::CTRL, (uint8_t *) &status, sizeof(status));
 
@@ -211,6 +213,8 @@ BQ25120a::ChargePhase BQ25120a::read_charge_phase() {
 }
 
 uint8_t BQ25120a::read_fault() {
+        ActiveScope active(*this);
+
         uint8_t status = 0;
         bool ret = readReg(registers::FAULT, (uint8_t *) &status, sizeof(status));
 
@@ -218,6 +222,8 @@ uint8_t BQ25120a::read_fault() {
 }
 
 uint8_t BQ25120a::read_ts_fault() {
+        ActiveScope active(*this);
+
         uint8_t status = 0;
         bool ret = readReg(registers::TS_FAULT, (uint8_t *) &status, sizeof(status));
 
@@ -225,6 +231,8 @@ uint8_t BQ25120a::read_ts_fault() {
 }
 
 chrg_state BQ25120a::read_charging_control() {
+        ActiveScope active(*this);
+
         uint8_t status = 0;
         bool ret = readReg(registers::CHARGE_CTRL, (uint8_t *) &status, sizeof(status));
 
@@ -251,6 +259,8 @@ chrg_state BQ25120a::read_charging_control() {
 
 
 uint8_t BQ25120a::write_charging_control(float mA) {
+        ActiveScope active(*this);
+
         uint8_t status = 0;
         bool ret = readReg(registers::CHARGE_CTRL, &status, sizeof(status));
 
@@ -272,6 +282,8 @@ uint8_t BQ25120a::write_charging_control(float mA) {
 
 
 uint8_t BQ25120a::write_LS_control(bool enable) {
+        ActiveScope active(*this);
+
         uint8_t status = 0;
 
         readReg(registers::LS_LDO_CTRL, &status, sizeof(status));
@@ -293,8 +305,6 @@ uint8_t BQ25120a::write_LDO_voltage_control(float volt) {
 
         volt = CLAMP(volt, 0.8f, 3.3f);
 
-        exit_high_impedance();
-
         // Per datasheet: "The LS/LDO output can only be changed when the
         // EN_LS_LDO and LSCTRL pin has disabled the output."
         // Must disable BOTH before changing voltage bits.
@@ -306,7 +316,6 @@ uint8_t BQ25120a::write_LDO_voltage_control(float volt) {
         writeReg(registers::LS_LDO_CTRL, &status, sizeof(status));
 
         // 2. Pull LSCTRL low
-        gpio_pin_set_dt(&cd_pin, 1); // ensure not in high-Z for the next GPIO
         const struct gpio_dt_spec lsctrl = {
                 .port = DEVICE_DT_GET(DT_NODELABEL(gpio0)),
                 .pin = 14,
@@ -328,6 +337,8 @@ uint8_t BQ25120a::write_LDO_voltage_control(float volt) {
 }
 
 float BQ25120a::read_ldo_voltage() {
+        ActiveScope active(*this);
+
         uint8_t status = 0;
         bool ret = readReg(registers::LS_LDO_CTRL, (uint8_t *) &status, sizeof(status));
 
@@ -337,12 +348,16 @@ float BQ25120a::read_ldo_voltage() {
 }
 
 uint8_t BQ25120a::read_ls_ldo_ctrl_raw() {
+        ActiveScope active(*this);
+
         uint8_t status = 0;
         readReg(registers::LS_LDO_CTRL, &status, sizeof(status));
         return status;
 }
 
 float BQ25120a::read_battery_voltage_control() {
+        ActiveScope active(*this);
+
         uint8_t status = 0;
         bool ret = readReg(registers::BAT_VOL_CTRL, (uint8_t *) &status, sizeof(status));
 
@@ -367,6 +382,8 @@ uint8_t BQ25120a::write_battery_voltage_control(float volt) {
 }
 
 chrg_state BQ25120a::read_termination_control() {
+        ActiveScope active(*this);
+
         uint8_t status = 0;
         bool ret = readReg(registers::TERM_CTRL, (uint8_t *) &status, sizeof(status));
 
@@ -411,6 +428,8 @@ uint8_t BQ25120a::write_termination_control(float mA, bool enable_termination) {
 }
 
 ilim_uvlo BQ25120a::read_uvlo_ilim() {
+        ActiveScope active(*this);
+
         struct ilim_uvlo param;
         uint8_t status = 0;
 
@@ -443,6 +462,8 @@ void BQ25120a::setup_ts_control() {
 }
 
 void BQ25120a::disable_ts() {
+        ActiveScope active(*this);
+
         uint8_t ts_fault = read_ts_fault();
 
         ts_fault &= ~(1 << 7);
@@ -476,6 +497,8 @@ void BQ25120a::enable_charge() {
 
 
 button_state BQ25120a::read_button_state() {
+        ActiveScope active(*this);
+
         struct button_state btn;
 
         uint8_t status = 0;

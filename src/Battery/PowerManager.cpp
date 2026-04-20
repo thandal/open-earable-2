@@ -94,12 +94,7 @@ void PowerManager::charge_ctrl_work_handler(struct k_work * work) {
 }
 
 void PowerManager::battery_controller_work_handler(struct k_work * work) {
-    button_state state;
-
-    {
-        BQ25120a::ActiveScope active(battery_controller);
-        state = battery_controller.read_button_state();
-    }
+    button_state state = battery_controller.read_button_state();
 
     // WAKE event = long-press threshold reached. Toggle power immediately so
     // the user sees the state change while the button is still held. Events
@@ -199,18 +194,14 @@ void PowerManager::fuel_gauge_work_handler(struct k_work * work) {
     }
 
     uint8_t ts_fault = 0;
-    uint8_t ctrl_raw = 0;
-    {
-        BQ25120a::ActiveScope active(battery_controller);
-        ctrl_raw = battery_controller.read_charging_state();
-        snap.phase = static_cast<BQ25120a::ChargePhase>(ctrl_raw >> 6);
-        snap.power_connected = battery_controller.power_connected();
-        if (snap.phase == BQ25120a::ChargePhase::Fault) {
-            snap.fault = battery_controller.read_fault();
-            ts_fault = battery_controller.read_ts_fault();
-        } else {
-            snap.fault = 0;
-        }
+    uint8_t ctrl_raw = battery_controller.read_charging_state();
+    snap.phase = static_cast<BQ25120a::ChargePhase>(ctrl_raw >> 6);
+    snap.power_connected = battery_controller.power_connected();
+    if (snap.phase == BQ25120a::ChargePhase::Fault) {
+        snap.fault = battery_controller.read_fault();
+        ts_fault = battery_controller.read_ts_fault();
+    } else {
+        snap.fault = 0;
     }
 
     msg.charging_state = classify_charging(snap, power_manager._battery_settings);
@@ -274,8 +265,6 @@ int PowerManager::begin() {
     battery_controller.begin();
     fuel_gauge.begin();
     earable_btn.begin();
-
-    battery_controller.exit_high_impedance();
 
     uint8_t bat_state = battery_controller.read_charging_state();
 
@@ -360,8 +349,6 @@ int PowerManager::begin() {
     battery_controller.set_power_connect_callback(power_good_callback);
     fuel_gauge.set_int_callback(fuel_gauge_callback);
 
-    battery_controller.enter_high_impedance();
-
     int ret = device_is_ready(error_led.port);
     if (!ret) {
         LOG_WRN("Error LED not ready.");
@@ -444,11 +431,7 @@ bool PowerManager::check_battery() {
 }
 
 void PowerManager::get_battery_status(battery_level_status &status) {
-    BQ25120a::ChargePhase phase;
-    {
-        BQ25120a::ActiveScope active(battery_controller);
-        phase = battery_controller.read_charge_phase();
-    }
+    BQ25120a::ChargePhase phase = battery_controller.read_charge_phase();
 
     status.flags = 0;
     status.power_state = 0x1; // battery_present
@@ -567,10 +550,7 @@ int PowerManager::power_down(bool fault) {
     }
 
     // Disable EN_LS_LDO in the BQ25120A so the 3.3V LDO is fully off
-    {
-        BQ25120a::ActiveScope active(battery_controller);
-        battery_controller.write_LS_control(false);
-    }
+    battery_controller.write_LS_control(false);
 
     ret = pm_device_action_run(ls_sd,  PM_DEVICE_ACTION_SUSPEND);
     ret = pm_device_action_run(ls_3_3, PM_DEVICE_ACTION_SUSPEND);
@@ -588,11 +568,7 @@ int PowerManager::power_down(bool fault) {
         uint8_t pmic_cd    = nrf_gpio_pin_out_read(NRF_GPIO_PIN_MAP(0, 17));
         uint8_t on_btn     = nrf_gpio_pin_read(NRF_GPIO_PIN_MAP(1, 5));
         uint8_t netcore_off = NRF_RESET->NETWORK.FORCEOFF & 1;
-        uint8_t en_ls_ldo;
-        {
-            BQ25120a::ActiveScope active(battery_controller);
-            en_ls_ldo = (battery_controller.read_ls_ldo_ctrl_raw() >> 7) & 1;
-        }
+        uint8_t en_ls_ldo = (battery_controller.read_ls_ldo_ctrl_raw() >> 7) & 1;
         LOG_WRN("poweroff audit: ls_1_8=%u ls_3_3=%u ls_sd=%u ppg_ldo=%u "
                 "EN_LS_LDO=%u pmic_cd=%u on_btn=%u netcore_off=%u",
                 ls_1_8_pin, ls_3_3_pin, ls_sd_pin, ppg_ldo,
@@ -692,21 +668,16 @@ static int cmd_battery_info(const struct shell *shell, size_t argc, const char *
     shell_print(shell, "  Time to Empty: %ih %02dmin", (int)tte / 60, (int)tte % 60);
 
     // Battery controller status
-    uint8_t en_ls_ldo;
-    {
-        BQ25120a::ActiveScope active(battery_controller);
+    shell_print(shell, "Charging Information:");
+    BQ25120a::ChargePhase phase = battery_controller.read_charge_phase();
+    shell_print(shell, "  Charging State: %i", static_cast<int>(phase));
+    shell_print(shell, "  Power Good: %i", battery_controller.power_connected());
 
-        shell_print(shell, "Charging Information:");
-        BQ25120a::ChargePhase phase = battery_controller.read_charge_phase();
-        shell_print(shell, "  Charging State: %i", static_cast<int>(phase));
-        shell_print(shell, "  Power Good: %i", battery_controller.power_connected());
+    struct chrg_state charge_ctrl = battery_controller.read_charging_control();
+    shell_print(shell, "  Charge Control: enabled=%i, current=%.1f mA",
+            charge_ctrl.enabled, charge_ctrl.mAh);
 
-        struct chrg_state charge_ctrl = battery_controller.read_charging_control();
-        shell_print(shell, "  Charge Control: enabled=%i, current=%.1f mA",
-                charge_ctrl.enabled, charge_ctrl.mAh);
-
-        en_ls_ldo = (battery_controller.read_ls_ldo_ctrl_raw() >> 7) & 1;
-    }
+    uint8_t en_ls_ldo = (battery_controller.read_ls_ldo_ctrl_raw() >> 7) & 1;
 
     // Load switch / LDO rail state
     shell_print(shell, "Load Switches:");
@@ -774,33 +745,29 @@ static int cmd_sensor_diag(const struct shell *shell, size_t argc, const char **
 
     // 3. BQ25120a PMIC registers
     shell_print(shell, "\n-- BQ25120a PMIC --");
-    {
-        BQ25120a::ActiveScope active(battery_controller);
+    uint8_t charging_state = battery_controller.read_charging_state();
+    uint8_t fault = battery_controller.read_fault();
+    uint8_t ts_fault = battery_controller.read_ts_fault();
+    uint8_t ls_ldo_raw = battery_controller.read_ls_ldo_ctrl_raw();
+    float ldo_voltage = battery_controller.read_ldo_voltage();
 
-        uint8_t charging_state = battery_controller.read_charging_state();
-        uint8_t fault = battery_controller.read_fault();
-        uint8_t ts_fault = battery_controller.read_ts_fault();
-        uint8_t ls_ldo_raw = battery_controller.read_ls_ldo_ctrl_raw();
-        float ldo_voltage = battery_controller.read_ldo_voltage();
+    shell_print(shell, "  Charging state reg: 0x%02x (state=%d)", charging_state, charging_state >> 6);
+    shell_print(shell, "  Fault reg: 0x%02x", fault);
+    for (const auto &b : BQ25120a::fault_bits) {
+        if (fault & b.mask) shell_print(shell, "    %s", b.name);
+    }
+    shell_print(shell, "  TS fault reg: 0x%02x", ts_fault);
+    shell_print(shell, "  LS_LDO_CTRL raw: 0x%02x", ls_ldo_raw);
+    shell_print(shell, "    EN_LS_LDO (bit7): %d", (ls_ldo_raw >> 7) & 1);
+    shell_print(shell, "    LDO voltage: %.1f V", (double)ldo_voltage);
+    shell_print(shell, "  Power Good (PG): %d", battery_controller.power_connected());
 
-        shell_print(shell, "  Charging state reg: 0x%02x (state=%d)", charging_state, charging_state >> 6);
-        shell_print(shell, "  Fault reg: 0x%02x", fault);
-        for (const auto &b : BQ25120a::fault_bits) {
-            if (fault & b.mask) shell_print(shell, "    %s", b.name);
-        }
-        shell_print(shell, "  TS fault reg: 0x%02x", ts_fault);
-        shell_print(shell, "  LS_LDO_CTRL raw: 0x%02x", ls_ldo_raw);
-        shell_print(shell, "    EN_LS_LDO (bit7): %d", (ls_ldo_raw >> 7) & 1);
-        shell_print(shell, "    LDO voltage: %.1f V", (double)ldo_voltage);
-        shell_print(shell, "  Power Good (PG): %d", battery_controller.power_connected());
-
-        // 3b. If LDO voltage is wrong, try to fix it and report
-        if ((ls_ldo_raw >> 7) == 0) {
-            shell_print(shell, "\n  EN_LS_LDO is OFF — re-running PMIC setup...");
-            power_manager.setup_pmic();
-            uint8_t after = battery_controller.read_ls_ldo_ctrl_raw();
-            shell_print(shell, "  After setup: LS_LDO_CTRL=0x%02x (EN=%d)", after, (after >> 7) & 1);
-        }
+    // 3b. If LDO voltage is wrong, try to fix it and report
+    if ((ls_ldo_raw >> 7) == 0) {
+        shell_print(shell, "\n  EN_LS_LDO is OFF — re-running PMIC setup...");
+        power_manager.setup_pmic();
+        uint8_t after = battery_controller.read_ls_ldo_ctrl_raw();
+        shell_print(shell, "  After setup: LS_LDO_CTRL=0x%02x (EN=%d)", after, (after >> 7) & 1);
     }
 
     // 4. I2C3 sensor probes
@@ -847,10 +814,7 @@ static int cmd_sensor_bus_reset(const struct shell *shell, size_t argc, const ch
     //    With EN_LS_LDO=1 persisting in the PMIC, the 3.3V LDO may leak
     //    even with LSCTRL low, preventing sensors from fully de-powering.
     shell_print(shell, "Disabling EN_LS_LDO in PMIC...");
-    {
-        BQ25120a::ActiveScope active(battery_controller);
-        battery_controller.write_LS_control(false);
-    }
+    battery_controller.write_LS_control(false);
 
     // 3. Suspend I2C peripherals before GPIO takeover
     shell_print(shell, "Suspending I2C peripherals...");

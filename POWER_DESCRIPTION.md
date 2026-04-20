@@ -2,10 +2,8 @@
 
 ## Context
 
-This started as a **code review / analysis** of the firmware's power-management
-strategy. Most of the §0 "target design" has now been implemented; issues
-called out in §3 that have been resolved are marked with ✅. The document is
-still part description of how things work today, part list of known issues.
+Description of how power management works today, plus a list of still-open
+issues.
 
 Reference reading:
 - Zephyr PM: https://docs.zephyrproject.org/latest/services/pm/index.html
@@ -14,7 +12,7 @@ Reference reading:
 
 ---
 
-## 0. Boot sequence and load-switch lifecycle (as implemented)
+## 0. Boot sequence and load-switch lifecycle
 
 ### Hardware power rails (from schematic)
 
@@ -83,7 +81,7 @@ T=?   main() → power_manager.begin()
       │  └→ fail: return power_down()  (rails stay off, sys_poweroff)
       ├→ power_on = true, state_indicator.init → KTD2026::begin
       │  └→ _get(ls_3_3)  → RESUME → gpio HIGH → LED on
-      ├→ Starts power_button_watch_work (see §8)
+      ├→ Starts power_button_watch_work (see §6)
       └→ main() continues:
          ├→ sdcard_manager.init() → acquires ls_1_8 + ls_sd briefly, probes
          │    sd_state pin (card-detect needs rails up on this board), keeps
@@ -104,19 +102,19 @@ T=?   main() → power_manager.begin()
                 → cascades _put(ls_1_8) → if refcount=0, SUSPEND → gpio LOW
 ```
 
-### What was implemented
+### Key configuration
 
 - **DTS** (`boards/openearable_v2_nrf5340_cpuapp.overlay`,
   `.../openearable_v2_nrf5340_cpuapp_common.dts`):
-  - `mx25r64` gets `power-domains = <&load_switch>` + `zephyr,pm-device-runtime-auto`.
-  - All three load-switch nodes get `zephyr,pm-device-runtime-auto`.
-  - The repo-local load-switch binding lives at
-    `boards/teco/openearable_v2/dts/bindings/load-switch.yaml` and includes
-    `#power-domain-cells = <0>` so other devices can declare it as their power domain.
+  - `mx25r64` has `power-domains = <&load_switch>` + `zephyr,pm-device-runtime-auto`.
+  - All three load-switch nodes carry `zephyr,pm-device-runtime-auto`.
+  - The repo-local load-switch binding at
+    `boards/teco/openearable_v2/dts/bindings/load-switch.yaml` declares
+    `#power-domain-cells = <0>` so other devices can use it as their power domain.
 - **Kconfig** (`prj.conf`): `CONFIG_PM_DEVICE_POWER_DOMAIN=y`.
-- **`KTD2026.cpp`**: no longer claims `ls_1_8`; only `ls_3_3`.
-- **`PowerManager::begin`**: claims no load switches. No per-reset-reason
-  force-boot blocks; `check_battery()` is the only gate (see §2).
+- **`KTD2026.cpp`**: claims only `ls_3_3`.
+- **`PowerManager::begin`**: claims no load switches. `check_battery()` is the
+  only boot gate (see §2); reset reason is logged but not gating.
 - **`SDCardManager::init`**: presence probe — briefly acquires `ls_1_8` + `ls_sd`,
   waits 1 ms, checks `sd_state` pin, keeps rails if a card is present, releases
   otherwise. Card-detect can't read the card unless rails are up (project memory:
@@ -128,7 +126,7 @@ T=?   main() → power_manager.begin()
   calls `pm_device_runtime_get(mx25r64_dev)` and DFU_STOPPED calls the matching
   `_put`, cascading through power-domains to `ls_1_8`.
 
-### Why the boot hang was fixed
+### Why the boot doesn't hang on SPI NOR
 
 The Zephyr `spi_nor` driver's `pm_device_driver_init` checks
 `pm_device_is_powered(dev)`: with `CONFIG_PM_DEVICE_POWER_DOMAIN=y` and a
@@ -174,7 +172,7 @@ clock or fully off (`sys_poweroff()`).
      BQ25120A (charger) over I²C1, driven by two work items
      (`charge_ctrl_delayable`, `fuel_gauge_work`) and three GPIO callbacks
      (`power_good_callback`, `fuel_gauge_callback`, `battery_controller_callback`).
-     Classification is factored into a pure `classify_charging()` helper (§6).
+     Classification is factored into a pure `classify_charging()` helper (§5).
    - Owns the boot/power-on/power-off sequence: `begin()` and `power_down()`.
    - Publishes battery state on the `battery_chan` ZBUS channel.
 
@@ -233,104 +231,62 @@ void Sensor::stop() {
     if (!_active) return;
     _active = false; _running = false;
     k_timer_stop(...); k_work_cancel(...);
-    hw.softReset()/stop()/sleepMode();   // varies — see §3.4
+    hw.softReset()/stop()/sleepMode();   // varies per sensor; all chips are
+                                         // driven into a sleep/suspend state
+                                         // before the rail is released
     pm_device_runtime_put(ls_1_8);
 }
 ```
 
 ---
 
-## 3. Issues
+## 3. Open issues
 
-### Critical
+### High
 
 #### 3.1 No mid-power "BLE advertising only" state
 During normal "idle" operation (advertising or connected) the BLE controller
 (network core + RF) is the dominant power consumer. There is no
 advertising-only / sensors-off mid-power state — the device is "everything on"
-or "off". The 12 s power-on delay reported in `PROBLEMS.md` may also be
-downstream of BLE init being slow. The **poweroff** path is handled — see §3.1a.
-
-#### 3.1a `bt_disable()` in `power_down()` — works
-Empirically tested on-device: `bt_disable()` returns 0 in ~234 ms and the audit
-reports `netcore_off=1`. Code path: `bt_disable()` → HCI driver close hook →
-`bt_hci_transport_teardown()` at `zephyr/drivers/bluetooth/hci/nrf53_support.c:23`
-→ `nrf53_cpunet_enable(false)` → onoff refcount → 0 → `onoff_stop` callback
-writes `NETWORK.FORCEOFF = Hold` via the HAL. Upstream Zephyr, not NCS-specific.
-The old "crashes / doesn't wake up" comment in the source was stale and has
-been removed. A 200 ms sleep before the call lets earlier `bt_conn_disconnect`
-events propagate.
+or "off".
 
 #### 3.2 No system PM is actually used
 `CONFIG_PM=y` is set but the application never enters a low-power sleep state.
 Zephyr's tickless idle reduces wakeups, but the SoC stays in CONSTLAT, the HF clock is
-likely running, and the I²C peripheral blocks (see 3.6) are powered. There is no PM
+likely running, and the I²C peripheral blocks (see 3.3) are powered. There is no PM
 policy callback, no `pm_state_force()`, no constraint API usage. The "low power" path
 is jump-straight-to-`sys_poweroff()`.
 
-#### 3.3 `power_down` re-initialises the LED controller before turning it off ✅ RESOLVED
-`power_down()` now just calls `led_controller.power_off()` — the spurious
-`led_controller.begin()` is gone.
-
-#### 3.4 Sensors don't actually sleep before their rail is cut
-Current state:
-
-| Sensor          | Driver               | Pre-cut shutdown                          |
-|-----------------|----------------------|-------------------------------------------|
-| BMX160 (IMU)    | `IMU.cpp:149-171`    | ✅ `imu.stop()` parks accel+gyro in `BMI160_*_SUSPEND_MODE` via `bmi160_set_sens_conf` |
-| BMP388 (Baro)   | `Baro.cpp`           | ✅ `bmp.sleep()` now sets `BMP3_MODE_SLEEP` before the `_put` |
-| BMA580 (Bone)   | `BoneConduction.cpp:140-153` | `bma580.stop()` (sets BMA5_REG_CMD_SUSPEND) ✓ |
-| MAXM86161 (PPG) | `PPG.cpp:156-169`    | `ppg.stop()` (REG_SYSTEM_CONTROL shutdown bit) ✓ |
-| MLX90632 (Temp) | `Temp.cpp`           | `temp.sleepMode()` ✓ |
-
-All sensors now quiesce before their rail drops.
-
-#### 3.5 PPG manually drives a GPIO LDO that is never released ✅ RESOLVED
-`PPG.cpp` now hoists the LDO `gpio_dt_spec` to file scope and clears it in both
-`init()`'s error path and `stop()` — the LDO is dropped before `ls_1_8`/`ls_3_3`
-are released, and the refcount leak on the init error path is fixed.
-
-#### 3.6 I²C buses are never gated
+#### 3.3 I²C buses are never gated
 `i2c1`, `i2c2`, `i2c3` all have `status = "okay"` and define both `default` and
 `sleep` pinctrl states (`*.dts:95-183`). But nothing ever drives the bus into the
 sleep state — `nordic,nrf-twim` only flips pinctrl when its own PM action callback
 runs, and nobody calls `pm_device_action_run` on the I²C controllers. So the TWIM
 peripheral blocks are clocked continuously.
 
-### High
-
-#### 3.7 No `power-domains` linkage between sensors and load switches
+#### 3.4 No `power-domains` linkage between sensors and load switches
 Sensor DT nodes (`bmp388@76`, `bma580@18`, `bmx160@68`, `mlx90632@3a`,
 `maxm86161@62`) declare no `power-domains` property. Combined with the fact that
 they're `compatible = "i2c-device"` and have no driver/PM callback, the load-switch
 refcount and the sensor's "active" state are coordinated only by the C++ wrappers.
-Easy to leak (see 3.5) and easy to introduce ordering bugs.
-
-#### 3.8 `ls_1_8` and `ls_sd` are pinned on for the device's entire lifetime ✅ RESOLVED
-`PowerManager::begin()` no longer claims any load switches. `SDCardManager`
-owns `ls_1_8` + `ls_sd` for the card-present duration only; when the card is
-removed the rails drop.
-
-#### 3.9 Begin-time load-switch enablement is duplicated and order-sensitive ✅ RESOLVED
-Gone — all three load-switch DT nodes have `zephyr,pm-device-runtime-auto`,
-so there's no explicit `pm_device_runtime_enable` in `begin()` at all.
+Easy to leak and easy to introduce ordering bugs.
 
 ### Medium
 
-#### 3.10 `power_down` ordering: sensors are stopped before BLE is disconnected
-`shutdown_subsystems()` still runs disconnect → ext-adv-stop →
+#### 3.5 `power_down` ordering: sensors are stopped before BLE is disconnected
+`shutdown_subsystems()` runs disconnect → ext-adv-stop →
 `stop_sensor_manager()` → stop-watchdog → `dac.end()` without waiting for the
 async disconnect events. The 200 ms sleep before `bt_disable()` is the
 existing buffer; re-ordering so audio/sensor teardown happens after BLE
-teardown is still a latent improvement.
+teardown is a latent improvement.
 
-#### 3.11 The `DEBOUNCE_POWER_MS = K_MSEC(1000)` constant is unused at the place that needs it
+#### 3.6 `DEBOUNCE_POWER_MS = K_MSEC(1000)` is unused at the place that needs it
 `PowerManager.h` defines it, but `power_good_callback` schedules
 `power_down_work` with `K_NO_WAIT`. So unplugging USB while powered-off triggers
 an immediate `power_down`, with no debounce. Not catastrophic but the named
 constant is misleading.
 
-#### 3.12 No fault-recovery path for non-undervoltage faults
+#### 3.7 No fault-recovery path for non-undervoltage faults
 In `classify_charging`, only BAT_UVLO (bit 5) has a recovery transition (→
 PRECHARGING when power is connected and current is flowing). OVP / TS / input-UV
 faults fall through to `FAULT` and re-enter it on the next poll with no exit.
@@ -339,82 +295,36 @@ the TS path, but everything else requires a user power-cycle.
 
 ### Low / code-quality
 
-#### 3.13 No `zephyr,pm-device-runtime-auto` on the load-switch nodes ✅ RESOLVED
-All three load-switch nodes now have the attribute; `PowerManager::begin()`
-doesn't need to enable any of them.
-
-#### 3.14 Synchronous `pm_device_runtime_put` everywhere
+#### 3.8 Synchronous `pm_device_runtime_put` everywhere
 Some shutdown paths (especially PPG, which talks to the chip) could use
 `pm_device_runtime_put_async` so the suspend completes off the calling thread.
 Probably doesn't matter for the rare power-down case but might smooth sensor
 reconfiguration.
 
-#### 3.15 Sensors aren't real Zephyr devices
+#### 3.9 Sensors aren't real Zephyr devices
 Compatible = `"i2c-device"` means: no `init_fn`, no `pm_action_cb`, no
-`PM_DEVICE_DT_INST_DEFINE`. We're paying the price (manual coordination, no domains,
-no auto-runtime, can't piggy-back on system PM) without the benefit (smaller code).
-This is a structural choice — converting to real drivers is a larger refactor — but
-it's the root cause of half the issues above.
+`PM_DEVICE_DT_INST_DEFINE`. We're paying the price (manual coordination, no
+`power-domains`, no auto-runtime, can't piggy-back on system PM) without the
+benefit (smaller code). This is a structural choice — converting to real
+drivers is a larger refactor — but it's the root cause of 3.4, 3.8, and would
+simplify most of the manual wrapper refcounting.
 
 ---
 
-## 4. Likely connections to PROBLEMS.md regressions
+## 4. Next steps
 
-`PROBLEMS.md` lists three live regressions. Possible links:
-
-1. **i2c3 sensor dropouts (temp, baro, bone)** — §3.4 is now closed (all
-   sensors quiesce before their rail drops) and §3.9 is resolved, so the
-   remaining suspects for this regression are bus-level (i2c controller never
-   gated, §3.6) or ordering issues during re-acquire, not per-sensor shutdown.
-
-2. **12 s power-on press** — most likely a BQ25120A button-hold-time register
-   change. The `Push-button Control` register is 0x08; bits `MRRESET[1:0]` set
-   the MR-hold → reset time (00=5s, 01=9s default, 10=11s, 11=15s), and bit
-   `MRWAKE2` sets the WAKE2 latch time (0=1000ms, 1=1500ms default). Firmware
-   never writes 0x08, so timings sit at reset defaults; a previous firmware
-   that felt like "~4s" almost certainly wrote `MRRESET=00`. `PowerManager`
-   itself doesn't gate on time — only on the WAKE2 latch.
-
-3. **Bone conductor data loss at 6400 Hz with SD logging** — primarily a CPU /
-   bus-contention issue (i2c3 at 1 MHz vs spi4 SD at 32 MHz, both DMA but both
-   draining the same RAM). Power-management adjacent only insofar as nothing is
-   ever clock-gated, so we run at full power throughout.
-
----
-
-## 5. Next steps
-
-**Done (Phase 1 of the original plan):**
-
-1. ✅ DTS + Kconfig: `mx25r64` wired into `power-domains`; `CONFIG_PM_DEVICE_POWER_DOMAIN=y`.
-2. ✅ KTD2026 claims only `ls_3_3`.
-3. ✅ `PowerManager::begin` claims no load switches; all three have `zephyr,pm-device-runtime-auto`.
-4. ✅ `SDCardManager`: presence probe in `init()`, rails held only while card is inserted.
-5. ✅ MCUmgr DFU hook gets/puts `mx25r64`.
-6. ✅ `power_down()`: spurious `led_controller.begin()` removed.
-7. ✅ `PPG` GPIO LDO released in `stop()` and the init error path.
-8. ✅ BMP388 `sleep()` call before rail cut.
-9. ✅ `PowerManager::begin` simplified: no per-reset-reason force-boot gymnastics,
-    `check_battery()` is the only gate (see §9 for why).
-10. ✅ Power-button state machine that waits for a post-boot release before
-     acting on BQ25120A WAKE events (see §8).
-11. ✅ USB-plug-while-running triggers a clean `reboot()` so MSC comes up via
-     the known-good cold-boot path (see §9).
-12. ✅ `reboot()` and `power_down()` share `shutdown_subsystems()`.
-13. ✅ BMX160 `IMU::stop()` parks accel+gyro in suspend mode before the rail drops.
-
-**Remaining:**
-
-- **Root-cause USB MSC mid-run failure** — the `reboot()` in §9 is a pragmatic
+- **Root-cause USB MSC mid-run failure** — the `reboot()` in §7 is a pragmatic
   fix; the underlying race between running system state and USB MSC attaching
-  to the SD disk is not understood (see §10).
+  to the SD disk is not understood (see §8).
 - **Consider converting sensors to real Zephyr drivers** with PM action
-  callbacks and `power-domains` (§3.15). Big refactor; would eliminate several
+  callbacks and `power-domains` (§3.9). Big refactor; would eliminate several
   categories of manual refcount bugs.
+- **Gate the I²C controllers** (§3.3) when no sensor/LED/codec is active.
+- **Add a BLE-only idle state** (§3.1) to cut average draw while advertising.
 
 ---
 
-## 6. Charging code: structure
+## 5. Charging code: structure
 
 The charging-related code lives in `src/Battery/PowerManager.{h,cpp}` and
 `src/Battery/BQ25120a.{h,cpp}`. A few patterns are load-bearing; grepping for
@@ -429,28 +339,24 @@ handler's big switch, `get_battery_status` GATT encoding, `cmd_battery_info`)
 uses the enum. One diagnostic (`cmd_sensor_diag`) still prints the raw byte
 inline — deliberate, because it also dumps the full register for debugging.
 
-### `BQ25120a::ActiveScope` — RAII guard for I2C access to the charger
+### `BQ25120a::ActiveScope` — internal RAII guard for I2C access
 
 I2C reads/writes to the BQ25120A require the chip to be out of high-impedance
-mode (CD pin low) while the transaction happens. `ActiveScope` is a refcounted
-RAII guard with a `k_mutex` that brackets any such access: the 0→1 transition
-calls `exit_high_impedance()`, the 1→0 transition calls `enter_high_impedance()`,
-and nested/concurrent scopes compose correctly. Call-site usage:
+mode (CD pin low) while the transaction happens. `ActiveScope` is a private,
+refcounted RAII guard with a `k_mutex`: the 0→1 transition calls
+`exit_high_impedance()`, the 1→0 transition calls `enter_high_impedance()`, and
+nested/concurrent scopes compose correctly.
 
-```cpp
-{
-    BQ25120a::ActiveScope active(battery_controller);
-    auto phase = battery_controller.read_charge_phase();
-    // ...
-}
-```
+**Every public I2C method self-wraps in an `ActiveScope`.** Callers just call
+`battery_controller.read_charge_phase()` and the hi-Z dance happens inside.
+Refcounting means a public method that calls another public method
+(`setup()` → the various `write_*` helpers) only toggles the CD pin on the
+outermost entry. `enter_high_impedance()` / `exit_high_impedance()` are also
+private; `ActiveScope` is the only thing that calls them.
 
-Most sites use the scope. A few exceptions: `PowerManager::begin()` spans ~100
-lines of init between a manual `exit_high_impedance()` and `enter_high_impedance()`
-because early returns into `power_down()` would dismiss a scope guard at the wrong
-time; and `power_down()` itself has a belt-and-suspenders standalone
-`enter_high_impedance()` after `set_wakeup_int`. `BQ25120a::setup()` and
-`BQ25120a::write_LDO_voltage_control()` use the scope internally.
+The single exception is `enter_ship_mode()`, which drives CD high directly as
+part of the fire-and-die ship-mode entry sequence (§9.3.1.1 of the datasheet) —
+the chip is going to cut SYS in a few ms anyway, so there's nothing to restore.
 
 ### `charger_init_pending` — ISR → work-queue handoff for charger re-init
 
@@ -466,8 +372,8 @@ the flag — `begin()` calls `setup_pmic()` once up front.
 All charger-configure paths (`begin()`, `charge_task()` on plug-in,
 `fuel_gauge_work_handler` on TS-fault recovery, the `sensor_diag` shell command)
 route through `setup_pmic()`. `_battery_settings` is referenced in exactly one
-place outside the member declaration. `BQ25120a::setup()` holds its own
-`ActiveScope` internally, so `setup_pmic()` adds no extra bracketing.
+place outside the member declaration. `BQ25120a::setup()` self-wraps in
+`ActiveScope`, so `setup_pmic()` just calls it plainly.
 
 ### `BQ25120a::fault_bits[]` — single source of truth for fault-register labels
 
@@ -504,7 +410,7 @@ the BQ25120A `EN_LS_LDO` bit.
 
 ---
 
-## 8. Power-button state machine
+## 6. Power-button state machine
 
 `PowerManager::begin()` no longer gates boot on BQ25120A button/wake register
 bits. The only boot gate is `check_battery()`. The button state machine is a
@@ -536,13 +442,12 @@ toggle.
 
 ---
 
-## 9. Reset-reason handling and USB-plug reboot
+## 7. Reset-reason handling and USB-plug reboot
 
 `begin()` reads `RESETREAS` for **diagnostics only** — it logs the bits and
 records `oe_boot_state.timer_reset` on `RESETPIN` wakes (the BQ25120A timer
-reset vs a programmer nRESET is still useful downstream) — but the reset
-reason does not gate boot. Historically there were four separate
-`if (reset_reas & X) power_on = true` blocks plus a charge-wait loop; all gone.
+reset vs a programmer nRESET is useful downstream) — but the reset reason
+does not gate boot.
 
 USB-plug while the device is already running is handled by triggering a
 graceful reboot instead of trying to bring USB MSC up against running app
@@ -561,7 +466,7 @@ System OFF, the new boot just proceeds normally (no special handling needed).
 
 ---
 
-## 10. Known limitation: USB MSC while device is running
+## 8. Known limitation: USB MSC while device is running
 
 `sd_bench` (firmware-side disk access) works reliably with the rails up, but
 host-initiated READ(10) requests over USB MSC time out with `DID_ERROR
@@ -569,18 +474,18 @@ cmd_age=3s` when USB is plugged into a running device. INQUIRY / READ_CAPACITY
 (served from cached `sd_card` fields, no SPI transaction) respond fine; the
 failure is specifically on data reads. Root cause not nailed down — suspected
 thread/priority contention between the USBD stack and whatever the app is
-doing when the host tries to read. Worked around by rebooting on USB plug (§9),
+doing when the host tries to read. Worked around by rebooting on USB plug (§7),
 which puts us into the cold-boot path that works end-to-end.
 
 ---
 
-## 11. Files referenced
+## 9. Files referenced
 
 | File | Notes |
 |------|-------|
 | `src/Battery/PowerManager.h` | Class definition; power-button / USB-plug work items; `first_release_seen` flag |
-| `src/Battery/PowerManager.cpp` | Simplified `begin`, unified `power_down`/`reboot` via `shutdown_subsystems`, `power_button_watch_handler`, `usb_plug_reboot_handler`, fault-log with CTRL/FAULT/TS_FAULT raw bytes |
-| `src/Battery/BQ25120a.{cpp,h}` | Charger; HiZ + `ActiveScope`, `ChargePhase`, `fault_bits`; button-hold-time registers (0x08) are not written, see §4 / 12 s power-on |
+| `src/Battery/PowerManager.cpp` | `begin`, `power_down`/`reboot` sharing `shutdown_subsystems`, `power_button_watch_handler`, `usb_plug_reboot_handler`, fault-log with CTRL/FAULT/TS_FAULT raw bytes |
+| `src/Battery/BQ25120a.{cpp,h}` | Charger; HiZ + `ActiveScope`, `ChargePhase`, `fault_bits`. Push-button Control register (0x08) is left at reset defaults (MRRESET=9s, MRWAKE2=1500ms) — firmware never writes it. |
 | `src/Battery/BQ27220.{cpp,h}` | Fuel gauge; wakeup interrupts |
 | `boards/teco/openearable_v2/board_init.c` | Custom load-switch PM devices |
 | `boards/teco/openearable_v2/openearable_v2_nrf5340_cpuapp_common.dts` | I²C/load-switch nodes; all three load switches carry `zephyr,pm-device-runtime-auto` |
@@ -598,5 +503,4 @@ which puts us into the cold-boot path that works end-to-end.
 | `src/main.cpp` | `sdcard_manager.init()` before `disk_access_init("SD")` |
 | `src/utils/StateIndicator.cpp` | MCUmgr DFU hook: `get`/`put` on `mx25r64` |
 | `prj.conf` | CONFIG_PM*, CONFIG_PM_DEVICE_POWER_DOMAIN, CONFIG_POWEROFF |
-| `PROBLEMS.md` | Reported regressions (sensor dropout, 12 s power-on, BC data loss) |
-| `SYSTEM_DESCRIPTION.md` | I²C topology, BMP388/BMX160/MLX90632 optimisation notes |
+| `SYSTEM_DESCRIPTION.md` | I²C topology, sensor/codec overview |
