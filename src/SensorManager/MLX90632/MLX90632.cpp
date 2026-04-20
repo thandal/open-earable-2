@@ -25,25 +25,10 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-//Declare global variables for the calibration values
-double P_R;
-double P_G;
-double P_T;
-double P_O;
-double Ea;
-double Eb;
-double Fa;
-double Fb;
-double Ga;
-double Gb;
-double Ka;
-double Ha;
-double Hb;
-
-double TOdut = 25.0; //Assume 25C for first iteration
-double TO0 = 25.0; //object temp from previous calculation
-double TA0 = 25.0; //ambient temp from previous calculation
-double sensorTemp; //Internal temp of the MLX sensor
+/* Calibration constants and iteration state live as float class members in
+ * MLX90632.h — see the datasheet's object-temperature formula. Float keeps
+ * the math on the Cortex-M33 single-precision FPU instead of emulated
+ * double. */
 
 #include "MLX90632.h"
 
@@ -111,36 +96,37 @@ bool MLX90632::begin(uint8_t deviceAddress, TWIM &i2c, status &returnError)
 
   setMode(MODE_SLEEP); //Before reading EEPROM sensor needs to stop taking readings
 
-  //Load all the static calibration factors
+  //Load all the static calibration factors. ldexpf(x, n) is x * 2^n — exact
+  //for these power-of-two scalings and avoids the pow() library call.
   int16_t tempValue16;
   int32_t tempValue32;
   readRegister32(EE_P_R, (uint32_t&)tempValue32);
-  P_R = (double)tempValue32 * pow(2, -8);
+  P_R = ldexpf((float)tempValue32, -8);
   readRegister32(EE_P_G, (uint32_t&)tempValue32);
-  P_G = (double)tempValue32 * pow(2, -20);
+  P_G = ldexpf((float)tempValue32, -20);
   readRegister32(EE_P_T, (uint32_t&)tempValue32);
-  P_T = (double)tempValue32 * pow(2, -44);
+  P_T = ldexpf((float)tempValue32, -44);
   readRegister32(EE_P_O, (uint32_t&)tempValue32);
-  P_O = (double)tempValue32 * pow(2, -8);
+  P_O = ldexpf((float)tempValue32, -8);
   readRegister32(EE_Ea, (uint32_t&)tempValue32);
-  Ea = (double)tempValue32 * pow(2, -16);
+  Ea = ldexpf((float)tempValue32, -16);
   readRegister32(EE_Eb, (uint32_t&)tempValue32);
-  Eb = (double)tempValue32 * pow(2, -8);
+  Eb = ldexpf((float)tempValue32, -8);
   readRegister32(EE_Fa, (uint32_t&)tempValue32);
-  Fa = (double)tempValue32 * pow(2, -46);
+  Fa = ldexpf((float)tempValue32, -46);
   readRegister32(EE_Fb, (uint32_t&)tempValue32);
-  Fb = (double)tempValue32 * pow(2, -36);
+  Fb = ldexpf((float)tempValue32, -36);
   readRegister32(EE_Ga, (uint32_t&)tempValue32);
-  Ga = (double)tempValue32 * pow(2, -36);
-  
+  Ga = ldexpf((float)tempValue32, -36);
+
   readRegister16(EE_Gb, (uint16_t&)tempValue16);
-  Gb = (double)tempValue16 * pow(2, -10);
+  Gb = ldexpf((float)tempValue16, -10);
   readRegister16(EE_Ka, (uint16_t&)tempValue16);
-  Ka = (double)tempValue16 * pow(2, -10);
+  Ka = ldexpf((float)tempValue16, -10);
   readRegister16(EE_Ha, (uint16_t&)tempValue16);
-  Ha = (double)tempValue16 * pow(2, -14); //Ha!
+  Ha = ldexpf((float)tempValue16, -14); //Ha!
   readRegister16(EE_Hb, (uint16_t&)tempValue16);
-  Hb = (double)tempValue16 * pow(2, -14);
+  Hb = ldexpf((float)tempValue16, -14);
 
   LOG_DBG("MLX90632 online");
 
@@ -213,19 +199,19 @@ float MLX90632::getObjectTemp(status& returnError)
   // Iterative object temperature computation (3 iterations for convergence)
   for (uint8_t i = 0 ; i < 3 ; i++)
   {
-    float VRta = nineRAM + (float)Gb * (sixRAM / 12.0f);
+    float VRta = nineRAM + Gb * (sixRAM / 12.0f);
     float AMB = (sixRAM / 12.0f) / VRta * 524288.0f;
     float S = (lowerRAM + upperRAM) / 2.0f;
-    float VRto = nineRAM + (float)Ka * (sixRAM / 12.0f);
+    float VRto = nineRAM + Ka * (sixRAM / 12.0f);
     float Sto = (S / 12.0f) / VRto * 524288.0f;
-    float TAdut = (AMB - (float)Eb) / (float)Ea + 25.0f;
+    float TAdut = (AMB - Eb) / Ea + 25.0f;
     float ambientTempK = TAdut + 273.15f;
 
-    float bigFraction = Sto / ((float)Fa * (float)Ha * (1.0f + (float)Ga * (TOdut - TO0) + (float)Fb * (TAdut - TA0)));
+    float bigFraction = Sto / (Fa * Ha * (1.0f + Ga * (TOdut - TO0) + Fb * (TAdut - TA0)));
 
     float objectTemp = bigFraction + ambientTempK * ambientTempK * ambientTempK * ambientTempK;
     objectTemp = sqrtf(sqrtf(objectTemp));
-    objectTemp = objectTemp - 273.15f - (float)Hb;
+    objectTemp = objectTemp - 273.15f - Hb;
 
     TO0 = objectTemp;
   }
@@ -287,11 +273,12 @@ float MLX90632::gatherSensorTemp(status &returnError)
   int16_t nineRAM;
   readRegister16(RAM_9, (uint16_t&)nineRAM);
 
-  double VRta = nineRAM + Gb * (sixRAM / 12.0);
+  float VRta = nineRAM + Gb * (sixRAM / 12.0f);
 
-  double AMB = (sixRAM / 12.0) / VRta * pow(2, 19);
+  float AMB = (sixRAM / 12.0f) / VRta * 524288.0f; // 2^19
 
-  double sensorTemp = P_O + (AMB - P_R) / P_G + P_T * pow((AMB - P_R), 2);
+  float dAMB = AMB - P_R;
+  float sensorTemp = P_O + dAMB / P_G + P_T * dAMB * dAMB;
 
   return(sensorTemp);
 }
